@@ -21,6 +21,7 @@ living={
   skill={ 6 6 6 4 3 1 }
   playable_data={ knights={ 23620 18664 23622 } }
   landed_data={
+    domain={ 3292 }
     levy=1455
     strength=1958
     current_strength=1958
@@ -35,14 +36,32 @@ landed_titles={
 }
 armies={ armies={} }
 regiments={
-1001={ owner=13015 origin=3292 owning_title=3292 stationed_title=3292 }
+1001={ owner=13015 origin=3292 owning_title=3292 deployment={ stationed_title=3292 } }
 1002={ owner=13015 origin=3292 owning_title=3292 }
 2001={ owner=99999 origin=3292 }
 }
 army_regiments={
-5001={ type="bowmen" current=300 max=300 chunks={ { regiment=1001 index=0 } } }
-5002={ type="light_footmen" current=200 max=200 chunks={ { regiment=1002 index=0 } } }
+5001={
+  type="bowmen"
+  chunks={
+    { regiment=1001 current=150 max=150 index=0 }
+    { regiment=1001 current=150 max=150 index=1 }
+  }
+}
+5002={
+  type="light_footmen"
+  chunks={
+    { regiment=1002 size=100 index=0 }
+    { regiment=1002 size=100 index=1 }
+  }
+}
 5003={ type="outside" current=999 max=999 chunks={ { regiment=2001 index=0 } } }
+}
+raid={
+raid={
+71={ raider=99999 defender=13015 target=3292 army=7001 loot=15 }
+72={ raider=88888 defender=77777 target=4444 army=7002 loot=5 }
+}
 }
 wars={ active_wars={} }
 `);
@@ -75,6 +94,7 @@ test("extracts mobilisation totals and the player's war", async () => {
   expect(snap.military.champions).toEqual({ ids: [], current: 0, max: null });
   expect(snap.military.menAtArms.source).toBe("unavailable");
   expect(snap.military.rallyPoints.source).toBe("unavailable");
+  expect(snap.military.raids.source).toBe("unavailable");
   expect(snap.military.wars).toHaveLength(1);
   const w = snap.military.wars[0];
   expect(w.playerSide).toBe("attacker");
@@ -84,7 +104,7 @@ test("extracts mobilisation totals and the player's war", async () => {
   expect(w.defenderScore).toBe(3.0);
 });
 
-test("links player Men-at-Arms from CK3 top-level regiment blocks", async () => {
+test("links player Men-at-Arms and derives strength from regiment chunks", async () => {
   const military = await queryGamestate(DETAIL_GS, (q) =>
     extractMilitary(q, new Localizer(null)),
   );
@@ -102,6 +122,10 @@ test("links player Men-at-Arms from CK3 top-level regiment blocks", async () => 
     "bowmen",
     "light_footmen",
   ]);
+  expect(military.menAtArms.regiments[0]?.current).toBe(300);
+  expect(military.menAtArms.regiments[0]?.max).toBe(300);
+  expect(military.menAtArms.regiments[1]?.current).toBe(200);
+  expect(military.menAtArms.regiments[1]?.max).toBe(200);
   expect(military.menAtArms.regiments[0]?.linkedRegimentIds).toEqual([1001]);
   expect(military.menAtArms.regiments[0]?.originTitleIds).toEqual([3292]);
   expect(military.menAtArms.regiments[0]?.owningTitleIds).toEqual([3292]);
@@ -111,6 +135,7 @@ test("links player Men-at-Arms from CK3 top-level regiment blocks", async () => 
     titleName: "Poznań",
   });
   expect(military.menAtArms.regiments[1]?.stationed).toBeNull();
+  expect(military.menAtArms.regiments[1]?.diagnostics).not.toBeNull();
 
   expect(military.rallyPoints).toEqual({
     references: [3292],
@@ -118,6 +143,21 @@ test("links player Men-at-Arms from CK3 top-level regiment blocks", async () => 
     source: "played_character",
   });
   expect(military.unattributedCurrentStrength).toBe(0);
+});
+
+test("exports active raid records and prioritizes player-relevant raids", async () => {
+  const military = await queryGamestate(DETAIL_GS, (q) =>
+    extractMilitary(q, new Localizer(null)),
+  );
+
+  expect(military.raids.source).toBe("raid_save");
+  expect(military.raids.activeCount).toBe(2);
+  expect(military.raids.playerRelevantCount).toBe(1);
+  expect(military.raids.truncated).toBe(false);
+  expect(military.raids.records[0]?.id).toBe("71");
+  expect(military.raids.records[0]?.playerRelevant).toBe(true);
+  expect(military.raids.records[0]?.fields["defender"]).toBe(13015);
+  expect(military.raids.records[0]?.fields["loot"]).toBe(15);
 });
 
 test("keeps nested regiment blocks as a compatibility fallback", async () => {
