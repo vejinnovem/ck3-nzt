@@ -43,7 +43,7 @@ SQLite is the durable source of historical data. The AI does not need to ingest 
 
 ## Windows quick start
 
-CK3-NZT includes an idempotent PowerShell installer/updater. It installs Git and a current Node.js LTS release through WinGet when necessary, clones the repository, installs npm dependencies and runs the verification suite locally.
+CK3-NZT includes an idempotent PowerShell installer/updater. It installs Git and a current Node.js LTS release through WinGet when necessary, clones the repository, installs npm dependencies, runs the verification suite locally and stores CK3 paths in a persistent local configuration file.
 
 Open **Windows PowerShell** and run:
 
@@ -67,6 +67,14 @@ Default application location:
 %LOCALAPPDATA%\CK3-NZT\app
 ```
 
+Persistent local configuration:
+
+```text
+%LOCALAPPDATA%\CK3-NZT\config.json
+```
+
+The installer first tries to locate the real Windows Documents folder (including redirected/OneDrive Documents) and the CK3 save directory. If it cannot find the saves, it asks for the full path to the `save games` folder. It also tries to locate the CK3 `game` directory for localization and can ask for it separately.
+
 After installation, capture the newest CK3 state with:
 
 ```powershell
@@ -74,7 +82,17 @@ cd "$env:LOCALAPPDATA\CK3-NZT\app"
 npm run export
 ```
 
-Future updates can be applied by double-clicking `update.cmd` in the application directory or by running `setup.ps1` again.
+Future updates can be applied by double-clicking `update.cmd` in the application directory or by running `setup.ps1` again. Existing path configuration is preserved. To change the saved paths later:
+
+```powershell
+.\setup.ps1 -Reconfigure
+```
+
+or directly:
+
+```powershell
+.\configure.ps1 -Force
+```
 
 ## First test on Windows
 
@@ -86,7 +104,8 @@ For the first alpha test, use a small throwaway CK3 campaign rather than an impo
 4. Close CK3 or leave it running. CK3-NZT only reads the save file and does not modify the game or save.
 5. Open PowerShell and run the three-command installer from the Windows quick start section above.
 6. A successful installation ends with a local verification summary. `Lint`, `Build` and `Tests` should each report `PASS`.
-7. Then run:
+7. During first-time configuration, confirm the automatically detected save directory or paste the full path to the CK3 `save games` folder when prompted.
+8. Then run:
 
 ```powershell
 cd "$env:LOCALAPPDATA\CK3-NZT\app"
@@ -112,14 +131,20 @@ Get-Content "$env:LOCALAPPDATA\CK3-NZT\export\manifest.json"
 Get-Content "$env:LOCALAPPDATA\CK3-NZT\export\changes.json"
 ```
 
-If CK3-NZT cannot find your save directory automatically, locate the CK3 `save games` folder and set it explicitly for the current PowerShell session:
+If the configured path is wrong or you move the CK3 data later, run:
 
 ```powershell
-$env:CK3_SAVE_DIR = "C:\path\to\Crusader Kings III\save games"
+.\configure.ps1 -Force
+```
+
+Environment variables can still override the saved configuration for one session, for example:
+
+```powershell
+$env:CK3_SAVE_DIR = "D:\path\to\Crusader Kings III\save games"
 npm run export
 ```
 
-Do not put a personal Windows path into repository files or commit it to Git. `CK3_SAVE_DIR` is a local runtime setting only.
+Do not put a personal Windows path into repository files or commit it to Git. The persistent config lives outside the repository under `%LOCALAPPDATA%\CK3-NZT`.
 
 ## Local verification
 
@@ -154,6 +179,7 @@ No OpenAI, Google, GitHub or other API token is required for the core parser, me
 By default, runtime data is kept outside the Git repository:
 
 ```text
+%LOCALAPPDATA%\CK3-NZT\config.json
 %LOCALAPPDATA%\CK3-NZT\data\memory.sqlite
 %LOCALAPPDATA%\CK3-NZT\export\current.json
 %LOCALAPPDATA%\CK3-NZT\export\changes.json
@@ -163,7 +189,7 @@ By default, runtime data is kept outside the Git repository:
 
 The source fingerprint written to the export deliberately excludes the absolute CK3 save path and Windows username.
 
-If you use Google Drive for Desktop (or another folder-sync tool), point only the export directory at a synced folder. The SQLite database can remain local, so CK3-NZT does not need Google OAuth credentials at all.
+If you use Google Drive for Desktop (or another folder-sync tool), point only the export directory at a synced folder. The SQLite database and local configuration can remain local, so CK3-NZT does not need Google OAuth credentials at all.
 
 Example for the current PowerShell session:
 
@@ -176,16 +202,17 @@ Do not commit local exports, databases, `.env` files or credentials. The reposit
 
 ## Configuration
 
-Environment variables:
+Persistent Windows configuration is stored in `%LOCALAPPDATA%\CK3-NZT\config.json`. Environment variables take precedence over that file and are useful for temporary overrides.
 
 | Variable | Purpose |
 | --- | --- |
 | `CK3_SAVE_DIR` | Override the CK3 save directory. |
 | `CK3_GAME_DIR` | Override the CK3 `game` directory used for localization. |
+| `CK3_NZT_CONFIG_FILE` | Override the local configuration file path. |
 | `CK3_NZT_DATA_DIR` | Override the private local SQLite data directory. |
 | `CK3_NZT_OUTPUT_DIR` | Override the compact export directory; this can be a synced folder. |
 
-On Windows CK3-NZT first checks the current user's Documents/OneDrive Documents locations. The original WSL `/mnt/c/...` discovery remains as a fallback.
+On Windows the configurator checks the actual Documents location from the current user's Windows shell settings, OneDrive locations and common Steam paths before prompting. The original WSL `/mnt/c/...` discovery remains as a fallback inside the application.
 
 ## Build from source
 
