@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { loadLocalConfig } from "./config.js";
 import type { Snapshot } from "./snapshot.js";
 
 type Scalar = string | number | boolean | null;
@@ -84,6 +85,10 @@ export function resolveDataDir(env: NodeJS.ProcessEnv = process.env): string {
 
 export function resolveOutputDir(env: NodeJS.ProcessEnv = process.env): string {
   if (env.CK3_NZT_OUTPUT_DIR) return env.CK3_NZT_OUTPUT_DIR;
+
+  const configured = loadLocalConfig(env).outputDir;
+  if (configured) return configured;
+
   if (process.platform === "win32" && env.LOCALAPPDATA) {
     return join(env.LOCALAPPDATA, "CK3-NZT", "export");
   }
