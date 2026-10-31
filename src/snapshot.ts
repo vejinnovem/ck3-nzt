@@ -20,6 +20,10 @@ import {
 } from "./extract/characters.js";
 import { extractRealmEconomy, type RealmEconomyInfo } from "./extract/domain.js";
 import { extractCouncil, type CouncilInfo } from "./extract/council.js";
+import {
+  extractCourtPositions,
+  type CourtPositionsInfo,
+} from "./extract/courtPositions.js";
 
 export interface RealmOverview {
   rulerName: string;
@@ -41,6 +45,7 @@ export interface Snapshot {
   family?: ImmediateFamilyInfo;
   economy?: RealmEconomyInfo;
   council?: CouncilInfo;
+  courtPositions?: CourtPositionsInfo;
   military: MilitaryInfo;
   succession: SuccessionInfo;
   diplomacy: DiplomacyInfo;
@@ -81,6 +86,7 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
     const family = extractImmediateFamily(q, loc, playerId);
     const economy = extractRealmEconomy(q, loc);
     const council = extractCouncil(q, loc);
+    const courtPositions = extractCourtPositions(q, loc);
     const military = extractMilitary(q, loc);
     const expansion = extractExpansion(q, loc, military.wars);
     const succession = extractSuccession(q, loc);
@@ -96,6 +102,7 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
       family,
       economy,
       council,
+      courtPositions,
       military,
       expansion,
       succession,
