@@ -9,6 +9,8 @@ $ErrorActionPreference = "Stop"
 $RepoUrl = "https://github.com/vejinnovem/ck3-nzt.git"
 $MinimumNodeMajor = 22
 $MinimumNodeMinorFor22 = 13
+$InstalledGitThisRun = $false
+$InstalledNodeThisRun = $false
 
 function Refresh-Path {
     $machine = [Environment]::GetEnvironmentVariable("Path", "Machine")
@@ -31,6 +33,7 @@ function Ensure-Git {
         --accept-package-agreements --accept-source-agreements
     if ($LASTEXITCODE -ne 0) { throw "Git installation failed with exit code $LASTEXITCODE." }
 
+    $script:InstalledGitThisRun = $true
     Refresh-Path
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
         throw "Git was installed but is not available in PATH. Open a new PowerShell window and run setup.ps1 again."
@@ -59,6 +62,7 @@ function Ensure-Node {
         --accept-package-agreements --accept-source-agreements
     if ($LASTEXITCODE -ne 0) { throw "Node.js installation failed with exit code $LASTEXITCODE." }
 
+    $script:InstalledNodeThisRun = $true
     Refresh-Path
     if (-not (Test-NodeVersion)) {
         throw "CK3-NZT requires Node.js 22.13 or newer. Open a new PowerShell window and run setup.ps1 again."
@@ -162,3 +166,11 @@ Write-Host "Application: $InstallDir"
 Write-Host "Node: $(node --version)"
 Write-Host "Git:  $(git --version)"
 Write-Host "Run 'npm run export' inside the application directory to capture the newest CK3 state."
+
+if ($InstalledGitThisRun -or $InstalledNodeThisRun) {
+    Write-Host ""
+    Write-Host "A prerequisite was installed during this run."
+    Write-Host "If setup.ps1 was launched through a separate powershell.exe process, the PowerShell window that launched it may still have the old PATH."
+    Write-Host "Open a new PowerShell window before using git/npm, or refresh PATH in the current window with:"
+    Write-Host '$env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")'
+}
