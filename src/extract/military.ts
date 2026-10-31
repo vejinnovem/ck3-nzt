@@ -30,7 +30,7 @@ export interface StationedReference {
 }
 
 export interface MenAtArmsRegimentInfo {
-  /** ID in armies/army_regiments. */
+  /** ID in the top-level army_regiments save block. */
   id: number;
   /** CK3 Men-at-Arms type key, e.g. bowmen. */
   type: string;
@@ -44,7 +44,7 @@ export interface MenAtArmsRegimentInfo {
 }
 
 export interface MenAtArmsSummary {
-  /** Number of player-owned MAA army_regiment records recovered from the global armies DB. */
+  /** Number of player-owned MAA army_regiment records recovered from the global save DB. */
   slotsUsed: number;
   /** Effective MAA slot cap depends on modifiers and is not reconstructed yet. */
   slotsMax: number | null;
@@ -53,10 +53,9 @@ export interface MenAtArmsSummary {
   totalMaxSoldiers: number | null;
   regiments: MenAtArmsRegimentInfo[];
   /**
-   * CK3 stores regiments globally rather than cleanly under the ruler. We link
-   * armies/army_regiments -> chunks/regiment -> armies/regiments.owner. This is
-   * intentionally marked best-effort so callers do not treat missing global
-   * records as proof that the ruler has no MAA.
+   * CK3 stores army_regiments and regiments as top-level save blocks. Older or
+   * synthetic fixtures may nest them below armies, so that layout remains a fallback.
+   * Linking is still best-effort because the global records can vary by game version.
    */
   source: "global_armies_best_effort" | "unavailable";
 }
@@ -148,8 +147,10 @@ function numericReferences(value: unknown, depth = 0): number[] {
 }
 
 function extractMenAtArms(q: Query, playerId: number, loc: Localizer): MenAtArmsSummary {
-  const armyRegiments = obj(q.at("/armies/army_regiments"));
-  const regiments = obj(q.at("/armies/regiments"));
+  // In real CK3 saves these are sibling top-level blocks, not children of `armies`.
+  // Keep the nested layout as a compatibility fallback for older/synthetic fixtures.
+  const armyRegiments = obj(q.at("/army_regiments")) ?? obj(q.at("/armies/army_regiments"));
+  const regiments = obj(q.at("/regiments")) ?? obj(q.at("/armies/regiments"));
   if (!armyRegiments || !regiments) {
     return {
       slotsUsed: 0,
@@ -167,7 +168,7 @@ function extractMenAtArms(q: Query, playerId: number, loc: Localizer): MenAtArms
     const armyRegiment = obj(rawArmyRegiment);
     if (!armyRegiment) continue;
     const type = typeof armyRegiment["type"] === "string" ? armyRegiment["type"] : null;
-    if (!type) continue;
+    if (!type) continue; // levies/knights do not carry a MAA type key
 
     const linkedRegimentIds = unique(numbersForKey(armyRegiment, "regiment"));
     const linkedRecords = linkedRegimentIds
