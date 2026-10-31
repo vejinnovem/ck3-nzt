@@ -2,16 +2,17 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, nzt-alpha]
   pull_request:
     branches: [main]
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         node-version: [22, 24]
     steps:
       - uses: actions/checkout@v7
@@ -25,3 +26,7 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test
+      - name: Validate PowerShell setup syntax
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: "[scriptblock]::Create((Get-Content -Raw ./setup.ps1)) | Out-Null"

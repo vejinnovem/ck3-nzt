@@ -1,0 +1,161 @@
+param(
+    [string]$InstallDir = "",
+    [switch]$SkipTests,
+    [switch]$ExportAfterBuild
+)
+
+$ErrorActionPreference = "Stop"
+$RepoUrl = "https://github.com/vejinnovem/ck3-nzt.git"
+$MinimumNodeMajor = 22
+$MinimumNodeMinorFor22 = 13
+
+function Refresh-Path {
+    $machine = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $user = [Environment]::GetEnvironmentVariable("Path", "User")
+    $env:Path = "$machine;$user"
+}
+
+function Require-Winget {
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        throw "WinGet is required for automatic prerequisite installation. Install/update Microsoft App Installer, then run this script again."
+    }
+}
+
+function Ensure-Git {
+    if (Get-Command git -ErrorAction SilentlyContinue) { return }
+
+    Require-Winget
+    Write-Host "Installing Git..."
+    winget install --id Git.Git -e --source winget `
+        --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) { throw "Git installation failed with exit code $LASTEXITCODE." }
+
+    Refresh-Path
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        throw "Git was installed but is not available in PATH. Open a new PowerShell window and run setup.ps1 again."
+    }
+}
+
+function Test-NodeVersion {
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) { return $false }
+
+    $raw = (node --version).TrimStart("v")
+    $parts = $raw.Split(".")
+    $major = [int]$parts[0]
+    $minor = [int]$parts[1]
+
+    if ($major -gt $MinimumNodeMajor) { return $true }
+    if ($major -lt $MinimumNodeMajor) { return $false }
+    return $minor -ge $MinimumNodeMinorFor22
+}
+
+function Ensure-Node {
+    if (Test-NodeVersion) { return }
+
+    Require-Winget
+    Write-Host "Installing a current Node.js LTS release..."
+    winget install --id OpenJS.NodeJS.LTS -e --source winget `
+        --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) { throw "Node.js installation failed with exit code $LASTEXITCODE." }
+
+    Refresh-Path
+    if (-not (Test-NodeVersion)) {
+        throw "CK3-NZT requires Node.js 22.13 or newer. Open a new PowerShell window and run setup.ps1 again."
+    }
+}
+
+function Get-HashOrNull([string]$Path) {
+    if (Test-Path $Path) {
+        return (Get-FileHash $Path -Algorithm SHA256).Hash
+    }
+    return $null
+}
+
+Ensure-Git
+Ensure-Node
+
+if ([string]::IsNullOrWhiteSpace($InstallDir)) {
+    if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot ".git"))) {
+        $InstallDir = $PSScriptRoot
+    } else {
+        $InstallDir = Join-Path $env:LOCALAPPDATA "CK3-NZT\app"
+    }
+}
+
+$InstallDir = [IO.Path]::GetFullPath($InstallDir)
+$repoGitDir = Join-Path $InstallDir ".git"
+$lockPath = Join-Path $InstallDir "package-lock.json"
+$needDependencies = $false
+
+if (-not (Test-Path $repoGitDir)) {
+    if (Test-Path $InstallDir) {
+        $items = Get-ChildItem -Force $InstallDir -ErrorAction SilentlyContinue
+        if ($items.Count -gt 0) {
+            throw "Install directory exists and is not an empty Git repository: $InstallDir"
+        }
+    }
+
+    $parent = Split-Path -Parent $InstallDir
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+
+    Write-Host "Cloning CK3-NZT into $InstallDir..."
+    git clone $RepoUrl $InstallDir
+    if ($LASTEXITCODE -ne 0) { throw "git clone failed." }
+    $needDependencies = $true
+} else {
+    Push-Location $InstallDir
+    try {
+        $changes = git status --porcelain
+        if ($changes) {
+            throw "Local changes detected in $InstallDir. Update aborted so nothing is overwritten. Commit, stash, or discard them first."
+        }
+
+        $oldLockHash = Get-HashOrNull $lockPath
+        Write-Host "Updating CK3-NZT from main..."
+        git fetch origin main
+        if ($LASTEXITCODE -ne 0) { throw "git fetch failed." }
+        git checkout main
+        if ($LASTEXITCODE -ne 0) { throw "git checkout main failed." }
+        git pull --ff-only origin main
+        if ($LASTEXITCODE -ne 0) { throw "git pull failed." }
+
+        $newLockHash = Get-HashOrNull $lockPath
+        if ($oldLockHash -ne $newLockHash) { $needDependencies = $true }
+    } finally {
+        Pop-Location
+    }
+}
+
+Push-Location $InstallDir
+try {
+    if ($needDependencies -or -not (Test-Path (Join-Path $InstallDir "node_modules"))) {
+        Write-Host "Installing npm dependencies..."
+        npm ci
+        if ($LASTEXITCODE -ne 0) { throw "npm ci failed." }
+    }
+
+    Write-Host "Building CK3-NZT..."
+    npm run build
+    if ($LASTEXITCODE -ne 0) { throw "Build failed." }
+
+    if (-not $SkipTests) {
+        Write-Host "Running tests..."
+        npm test
+        if ($LASTEXITCODE -ne 0) { throw "Tests failed." }
+    }
+
+    if ($ExportAfterBuild) {
+        Write-Host "Reading the newest CK3 save..."
+        npm run export
+        if ($LASTEXITCODE -ne 0) { throw "CK3 state export failed." }
+    }
+} finally {
+    Pop-Location
+}
+
+Write-Host ""
+Write-Host "CK3-NZT is ready."
+Write-Host "Application: $InstallDir"
+Write-Host "Node: $(node --version)"
+Write-Host "Git:  $(git --version)"
+Write-Host "Run 'npm run export' inside the application directory to capture the newest CK3 state."

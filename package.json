@@ -1,31 +1,33 @@
 {
-  "name": "ck3-strategy-advisor",
-  "version": "0.1.2",
-  "description": "A local, read-only Model Context Protocol server that reads your latest Crusader Kings III save and exposes your strategic situation to Claude as curated tools.",
+  "name": "ck3-nzt",
+  "version": "0.2.0-alpha.1",
+  "description": "Persistent strategic memory and AI advisory bridge for Crusader Kings III.",
   "type": "module",
   "license": "MIT",
-  "author": "Thom Andretti",
-  "homepage": "https://github.com/thomandretti/ck3-strategy-advisor#readme",
+  "author": "CK3-NZT contributors",
+  "homepage": "https://github.com/vejinnovem/ck3-nzt#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/thomandretti/ck3-strategy-advisor.git"
+    "url": "git+https://github.com/vejinnovem/ck3-nzt.git"
   },
   "bugs": {
-    "url": "https://github.com/thomandretti/ck3-strategy-advisor/issues"
+    "url": "https://github.com/vejinnovem/ck3-nzt/issues"
   },
   "keywords": [
-    "mcp",
-    "model-context-protocol",
     "crusader-kings-iii",
     "ck3",
-    "claude",
+    "strategy",
+    "ai",
+    "mcp",
+    "model-context-protocol",
     "paradox"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "bin": {
-    "ck3-advisor": "dist/index.js"
+    "ck3-advisor": "dist/index.js",
+    "ck3-nzt-export": "dist/exporter.js"
   },
   "files": [
     "dist"
@@ -33,6 +35,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
+    "export": "node dist/exporter.js",
+    "dev:export": "tsx src/exporter.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
@@ -51,7 +55,7 @@
     "@types/adm-zip": "^0.5.5",
     "@types/node": "^26.0.1",
     "eslint": "^10.5.0",
-    "eslint-config-prettier": "^10.1.8",
+    "eslint-config-prettier": "^10.0.1",
     "globals": "^17.7.0",
     "prettier": "^3.8.4",
     "tsx": "^4.0.0",
