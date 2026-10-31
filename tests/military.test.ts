@@ -33,9 +33,9 @@ landed_titles={
 3292={ key="b_poznan" name="Poznań" }
 }
 }
-armies={
+armies={ armies={} }
 regiments={
-1001={ owner=13015 origin=3292 owning_title=3292 }
+1001={ owner=13015 origin=3292 owning_title=3292 stationed_title=3292 }
 1002={ owner=13015 origin=3292 owning_title=3292 }
 2001={ owner=99999 origin=3292 }
 }
@@ -44,6 +44,23 @@ army_regiments={
 5002={ type="light_footmen" current=200 max=200 chunks={ { regiment=1002 index=0 } } }
 5003={ type="outside" current=999 max=999 chunks={ { regiment=2001 index=0 } } }
 }
+wars={ active_wars={} }
+`);
+
+const NESTED_DETAIL_GS = Buffer.from(`
+date=867.3.1
+played_character={ character=13015 player=1 }
+living={
+13015={
+  first_name="Siemowit"
+  skill={ 6 6 6 4 3 1 }
+  playable_data={ knights={} }
+  landed_data={ levy=100 strength=200 current_strength=200 strength_without_hires=200 }
+}
+}
+armies={
+regiments={ 1001={ owner=13015 } }
+army_regiments={ 5001={ type="bowmen" current=100 max=100 chunks={ { regiment=1001 index=0 } } } }
 armies={}
 }
 wars={ active_wars={} }
@@ -67,7 +84,7 @@ test("extracts mobilisation totals and the player's war", async () => {
   expect(w.defenderScore).toBe(3.0);
 });
 
-test("links player Men-at-Arms through the global regiment database", async () => {
+test("links player Men-at-Arms from CK3 top-level regiment blocks", async () => {
   const military = await queryGamestate(DETAIL_GS, (q) =>
     extractMilitary(q, new Localizer(null)),
   );
@@ -88,11 +105,27 @@ test("links player Men-at-Arms through the global regiment database", async () =
   expect(military.menAtArms.regiments[0]?.linkedRegimentIds).toEqual([1001]);
   expect(military.menAtArms.regiments[0]?.originTitleIds).toEqual([3292]);
   expect(military.menAtArms.regiments[0]?.owningTitleIds).toEqual([3292]);
+  expect(military.menAtArms.regiments[0]?.stationed).toEqual({
+    field: "stationed_title",
+    id: 3292,
+    titleName: "Poznań",
+  });
+  expect(military.menAtArms.regiments[1]?.stationed).toBeNull();
 
   expect(military.rallyPoints).toEqual({
     references: [3292],
     count: 1,
     source: "played_character",
   });
+  expect(military.unattributedCurrentStrength).toBe(0);
+});
+
+test("keeps nested regiment blocks as a compatibility fallback", async () => {
+  const military = await queryGamestate(NESTED_DETAIL_GS, (q) =>
+    extractMilitary(q, new Localizer(null)),
+  );
+
+  expect(military.menAtArms.slotsUsed).toBe(1);
+  expect(military.menAtArms.totalCurrentSoldiers).toBe(100);
   expect(military.unattributedCurrentStrength).toBe(0);
 });
