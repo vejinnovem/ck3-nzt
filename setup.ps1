@@ -3,7 +3,8 @@ param(
     [Alias("SkipTests")]
     [switch]$SkipVerification,
     [switch]$ExportAfterBuild,
-    [switch]$Reconfigure
+    [switch]$Reconfigure,
+    [switch]$InstallGoogleDrive
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,6 +13,7 @@ $MinimumNodeMajor = 22
 $MinimumNodeMinorFor22 = 13
 $InstalledGitThisRun = $false
 $InstalledNodeThisRun = $false
+$InstalledGoogleDriveThisRun = $false
 
 function Refresh-Path {
     $machine = [Environment]::GetEnvironmentVariable("Path", "Machine")
@@ -70,6 +72,41 @@ function Ensure-Node {
     }
 }
 
+function Test-GoogleDriveInstalled {
+    if (-not $env:ProgramFiles) { return $false }
+    return Test-Path (Join-Path $env:ProgramFiles 'Google\Drive File Stream')
+}
+
+function Start-GoogleDrive {
+    if (-not $env:ProgramFiles) { return }
+    $root = Join-Path $env:ProgramFiles 'Google\Drive File Stream'
+    if (-not (Test-Path $root)) { return }
+
+    $exe = Get-ChildItem -Path $root -Filter 'GoogleDriveFS.exe' -File -Recurse -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if ($exe) {
+        Start-Process -FilePath $exe.FullName -ErrorAction SilentlyContinue | Out-Null
+    }
+}
+
+function Ensure-GoogleDrive {
+    if (Test-GoogleDriveInstalled) {
+        Write-Host "Google Drive for desktop is already installed."
+        Start-GoogleDrive
+        return
+    }
+
+    Require-Winget
+    Write-Host "Installing Google Drive for desktop..."
+    winget install --id Google.GoogleDrive -e --source winget `
+        --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) { throw "Google Drive installation failed with exit code $LASTEXITCODE." }
+
+    $script:InstalledGoogleDriveThisRun = $true
+    Start-GoogleDrive
+}
+
 function Get-HashOrNull([string]$Path) {
     if (Test-Path $Path) {
         return (Get-FileHash $Path -Algorithm SHA256).Hash
@@ -93,8 +130,9 @@ $repoGitDir = Join-Path $InstallDir ".git"
 $lockPath = Join-Path $InstallDir "package-lock.json"
 $configPath = Join-Path $env:LOCALAPPDATA "CK3-NZT\config.json"
 $needDependencies = $false
+$freshInstall = -not (Test-Path $repoGitDir)
 
-if (-not (Test-Path $repoGitDir)) {
+if ($freshInstall) {
     if (Test-Path $InstallDir) {
         $items = Get-ChildItem -Force $InstallDir -ErrorAction SilentlyContinue
         if ($items.Count -gt 0) {
@@ -153,13 +191,33 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Build failed." }
     }
 
+    $shouldInstallGoogleDrive = $InstallGoogleDrive
+    if ($freshInstall -and -not (Test-GoogleDriveInstalled) -and -not $InstallGoogleDrive) {
+        Write-Host ""
+        Write-Host "Optional: Google Drive for desktop can sync CK3-NZT's compact AI export for ChatGPT."
+        $answer = Read-Host 'Install Google Drive for desktop now? [y/N]'
+        if ($answer -match '^(y|yes)$') { $shouldInstallGoogleDrive = $true }
+    }
+
+    if ($shouldInstallGoogleDrive) {
+        Write-Host ""
+        Ensure-GoogleDrive
+        if ($InstalledGoogleDriveThisRun) {
+            Write-Host ""
+            Write-Host "Google Drive for desktop was installed and started."
+            Write-Host "Complete sign-in in Google Drive/browser. When My Drive is visible in File Explorer, press Enter."
+            Write-Host "You may also press Enter immediately and configure the synced export folder later with .\setup.ps1 -Reconfigure."
+            Read-Host | Out-Null
+        }
+    }
+
     if ($Reconfigure -or -not (Test-Path $configPath)) {
         Write-Host ""
-        Write-Host "Configuring CK3 paths..."
+        Write-Host "Configuring CK3 paths and AI export..."
         $configureArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $InstallDir 'configure.ps1'))
         if ($Reconfigure) { $configureArgs += '-Force' }
         & powershell.exe @configureArgs
-        if ($LASTEXITCODE -ne 0) { throw "CK3 path configuration failed." }
+        if ($LASTEXITCODE -ne 0) { throw "CK3 configuration failed." }
     }
 
     if ($ExportAfterBuild) {
@@ -178,7 +236,12 @@ Write-Host "Configuration: $configPath"
 Write-Host "Node: $(node --version)"
 Write-Host "Git:  $(git --version)"
 Write-Host "Run 'npm run export' inside the application directory to capture the newest CK3 state."
-Write-Host "Run '.\setup.ps1 -Reconfigure' to change CK3 paths later."
+Write-Host "Run '.\setup.ps1 -Reconfigure' to change CK3/export paths later."
+if (-not (Test-GoogleDriveInstalled)) {
+    Write-Host "Run '.\setup.ps1 -InstallGoogleDrive' if you want to add the optional Google Drive bridge later."
+} elseif ($InstalledGoogleDriveThisRun -and -not $Reconfigure -and (Test-Path $configPath)) {
+    Write-Host "After Google Drive sign-in, run '.\setup.ps1 -Reconfigure' to point AI export at a folder inside My Drive."
+}
 
 if ($InstalledGitThisRun -or $InstalledNodeThisRun) {
     Write-Host ""
