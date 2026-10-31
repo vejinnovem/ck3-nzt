@@ -34,6 +34,8 @@ async function main(): Promise<void> {
     console.log(
       `CK3-NZT snapshot ${snapshot.date} stored (${result.changeCount} strategic changes).`,
     );
+  } else if (result.refreshed) {
+    console.log(`CK3-NZT snapshot ${snapshot.date} was already stored; AI export refreshed.`);
   } else {
     console.log(`CK3-NZT is already up to date for ${snapshot.date}.`);
   }
