@@ -2,7 +2,8 @@ param(
     [string]$InstallDir = "",
     [Alias("SkipTests")]
     [switch]$SkipVerification,
-    [switch]$ExportAfterBuild
+    [switch]$ExportAfterBuild,
+    [switch]$Reconfigure
 )
 
 $ErrorActionPreference = "Stop"
@@ -90,6 +91,7 @@ if ([string]::IsNullOrWhiteSpace($InstallDir)) {
 $InstallDir = [IO.Path]::GetFullPath($InstallDir)
 $repoGitDir = Join-Path $InstallDir ".git"
 $lockPath = Join-Path $InstallDir "package-lock.json"
+$configPath = Join-Path $env:LOCALAPPDATA "CK3-NZT\config.json"
 $needDependencies = $false
 
 if (-not (Test-Path $repoGitDir)) {
@@ -151,6 +153,15 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Build failed." }
     }
 
+    if ($Reconfigure -or -not (Test-Path $configPath)) {
+        Write-Host ""
+        Write-Host "Configuring CK3 paths..."
+        $configureArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $InstallDir 'configure.ps1'))
+        if ($Reconfigure) { $configureArgs += '-Force' }
+        & powershell.exe @configureArgs
+        if ($LASTEXITCODE -ne 0) { throw "CK3 path configuration failed." }
+    }
+
     if ($ExportAfterBuild) {
         Write-Host "Reading the newest CK3 save..."
         npm run export
@@ -163,9 +174,11 @@ try {
 Write-Host ""
 Write-Host "CK3-NZT is ready."
 Write-Host "Application: $InstallDir"
+Write-Host "Configuration: $configPath"
 Write-Host "Node: $(node --version)"
 Write-Host "Git:  $(git --version)"
 Write-Host "Run 'npm run export' inside the application directory to capture the newest CK3 state."
+Write-Host "Run '.\setup.ps1 -Reconfigure' to change CK3 paths later."
 
 if ($InstalledGitThisRun -or $InstalledNodeThisRun) {
     Write-Host ""
