@@ -236,7 +236,7 @@ export function extractCouncil(q: Query, loc: Localizer, candidateLimit = 30): C
     }
   }
 
-  const candidates = courtPeople
+  const candidates: CourtCandidateInfo[] = courtPeople
     .map(({ id, status }) => ({ character: extractCharacter(q, loc, id), status }))
     .filter(
       (entry): entry is { character: CharacterInfo; status: CourtStatus } => entry.character !== null,
