@@ -1,8 +1,8 @@
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { buildChanges, persistSnapshot } from "../src/memory.js";
+import { buildChanges, persistSnapshot, resolveOutputDir } from "../src/memory.js";
 import type { Snapshot } from "../src/snapshot.js";
 
 const temporaryDirectories: string[] = [];
@@ -64,6 +64,27 @@ test("strategic changes include numeric deltas", () => {
     after: 2300,
     delta: 300,
   });
+});
+
+test("persistent local config can select the AI export directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ck3-nzt-output-config-"));
+  temporaryDirectories.push(root);
+  const configPath = join(root, "config.json");
+  const configuredOutput = join(root, "drive", "CK3-NZT");
+
+  await writeFile(
+    configPath,
+    JSON.stringify({ saveDir: null, gameDir: null, outputDir: configuredOutput }),
+    "utf8",
+  );
+
+  expect(resolveOutputDir({ CK3_NZT_CONFIG_FILE: configPath })).toBe(configuredOutput);
+  expect(
+    resolveOutputDir({
+      CK3_NZT_CONFIG_FILE: configPath,
+      CK3_NZT_OUTPUT_DIR: join(root, "override"),
+    }),
+  ).toBe(join(root, "override"));
 });
 
 test("persistent memory stores SQLite history and compact AI exports", async () => {
