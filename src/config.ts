@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -6,10 +7,36 @@ export interface AdvisorConfig {
   gameDir: string | null;
 }
 
+function configFilePath(env: NodeJS.ProcessEnv): string | null {
+  if (env.CK3_NZT_CONFIG_FILE) return env.CK3_NZT_CONFIG_FILE;
+  if (env.LOCALAPPDATA) return join(env.LOCALAPPDATA, "CK3-NZT", "config.json");
+  if (env.XDG_CONFIG_HOME) return join(env.XDG_CONFIG_HOME, "ck3-nzt", "config.json");
+  if (env.HOME) return join(env.HOME, ".config", "ck3-nzt", "config.json");
+  return null;
+}
+
+function loadLocalConfig(env: NodeJS.ProcessEnv): Partial<AdvisorConfig> {
+  const path = configFilePath(env);
+  if (!path) return {};
+
+  try {
+    // Windows PowerShell 5.1 writes UTF-8 with a BOM by default.
+    const raw = readFileSync(path, "utf8").replace(/^\uFEFF/, "");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return {
+      saveDir: typeof parsed.saveDir === "string" && parsed.saveDir ? parsed.saveDir : null,
+      gameDir: typeof parsed.gameDir === "string" && parsed.gameDir ? parsed.gameDir : null,
+    };
+  } catch {
+    return {};
+  }
+}
+
 export function resolveConfig(env: NodeJS.ProcessEnv = process.env): AdvisorConfig {
+  const local = loadLocalConfig(env);
   return {
-    saveDir: env.CK3_SAVE_DIR ?? null,
-    gameDir: env.CK3_GAME_DIR ?? null,
+    saveDir: env.CK3_SAVE_DIR ?? local.saveDir ?? null,
+    gameDir: env.CK3_GAME_DIR ?? local.gameDir ?? null,
   };
 }
 
