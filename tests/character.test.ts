@@ -43,6 +43,8 @@ living={
   first_name="Kazimierz"
   birth=855.3.1
   skill={ 2 3 2 1 2 1 }
+  family_data={ spouse=5 }
+  court_data={ employer=1 council_task=77 }
   alive_data={ health=5.0 }
 }
 4={
@@ -50,8 +52,11 @@ living={
   female=yes
   birth=858.7.1
   skill={ 1 1 2 2 3 1 }
+  family_data={ betrothed=6 }
   alive_data={ health=5.0 }
 }
+5={ first_name="Mila" female=yes birth=856.1.1 skill={ 1 1 1 1 1 1 } }
+6={ first_name="Bogdan" birth=855.1.1 skill={ 1 1 1 1 1 1 } }
 }
 `);
 
@@ -80,6 +85,21 @@ test("extractCharacter exposes ruler advisory fields", async () => {
   expect(c!.fertility).toBe(0.62);
   expect(c!.focus?.type).toBe("stewardship_domain_focus");
   expect(c!.perks).toEqual(["tax_man_perk", "cutting_cornerstones_perk"]);
+  expect(c!.isMarried).toBe(true);
+  expect(c!.spouseIds).toEqual([2]);
+});
+
+test("extractCharacter exposes marriage and court status for heirs", async () => {
+  const loc = new Localizer(null);
+  const heir = await queryGamestate(FAMILY_GS, (q) => extractCharacter(q, loc, 3));
+  expect(heir?.isMarried).toBe(true);
+  expect(heir?.spouseIds).toEqual([5]);
+  expect(heir?.employerId).toBe(1);
+  expect(heir?.councilTaskId).toBe(77);
+
+  const daughter = await queryGamestate(FAMILY_GS, (q) => extractCharacter(q, loc, 4));
+  expect(daughter?.isMarried).toBe(false);
+  expect(daughter?.betrothedId).toBe(6);
 });
 
 test("extractImmediateFamily returns spouse, children, and succession positions", async () => {
@@ -92,6 +112,8 @@ test("extractImmediateFamily returns spouse, children, and succession positions"
     ["Kazimierz", 1],
     ["Eufemia", 2],
   ]);
+  expect(family.children[0]?.isMarried).toBe(true);
+  expect(family.children[1]?.betrothedId).toBe(6);
 });
 
 test("extractCharacter returns null for an unknown id", async () => {
