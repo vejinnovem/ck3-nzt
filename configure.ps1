@@ -110,8 +110,30 @@ function Find-GameDir {
     return $null
 }
 
+function Resolve-OutputDir([string]$Entered, [string]$Fallback) {
+    if ([string]::IsNullOrWhiteSpace($Entered)) { return $Fallback }
+
+    $expanded = Expand-Path ($Entered.Trim('"'))
+    try {
+        New-Item -ItemType Directory -Force -Path $expanded | Out-Null
+        return (Resolve-Path $expanded).Path
+    } catch {
+        throw "Could not create or access AI export directory: $expanded"
+    }
+}
+
 $configDir = Join-Path $env:LOCALAPPDATA 'CK3-NZT'
 $configPath = Join-Path $configDir 'config.json'
+$defaultOutputDir = Join-Path $configDir 'export'
+$existingConfig = $null
+
+if (Test-Path $configPath) {
+    try {
+        $existingConfig = Get-Content $configPath -Raw | ConvertFrom-Json
+    } catch {
+        $existingConfig = $null
+    }
+}
 
 if ((Test-Path $configPath) -and -not $Force) {
     Write-Host "CK3-NZT configuration already exists: $configPath"
@@ -159,11 +181,25 @@ if (-not $saveDir) {
     exit 0
 }
 
+$currentOutputDir = $defaultOutputDir
+if ($existingConfig -and $existingConfig.outputDir) {
+    $currentOutputDir = [string]$existingConfig.outputDir
+}
+
+Write-Host ""
+Write-Host "AI export directory"
+Write-Host "CK3-NZT can keep the compact AI files locally or write them directly into a synced folder."
+Write-Host "For Google Drive for desktop, create a folder such as 'CK3-NZT' inside My Drive and paste its Windows path here."
+Write-Host "Current/default: $currentOutputDir"
+$enteredOutput = Read-Host 'AI export directory (press Enter to keep current/default)'
+$outputDir = Resolve-OutputDir $enteredOutput $currentOutputDir
+
 New-Item -ItemType Directory -Force -Path $configDir | Out-Null
 
 $config = [ordered]@{
     saveDir = $saveDir
     gameDir = $gameDir
+    outputDir = $outputDir
 }
 
 $config | ConvertTo-Json | Set-Content -Path $configPath -Encoding UTF8
@@ -172,3 +208,4 @@ Write-Host ""
 Write-Host "Saved CK3-NZT configuration: $configPath"
 Write-Host "Save directory: $saveDir"
 if ($gameDir) { Write-Host "Game directory: $gameDir" }
+Write-Host "AI export directory: $outputDir"
