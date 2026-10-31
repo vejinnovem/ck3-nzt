@@ -47,25 +47,64 @@ function Find-SaveDir {
     return $null
 }
 
-function Find-GameDir {
-    $candidates = @()
+function Normalize-GameDir([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
 
-    foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
-        if (-not $root) { continue }
-        $candidates += (Join-Path $root 'Steam\steamapps\common\Crusader Kings III\game')
+    $Path = $Path.Trim('"')
+    if (-not (Test-Path $Path -PathType Container)) { return $null }
+
+    $resolved = (Resolve-Path $Path).Path
+    if (Test-Path (Join-Path $resolved 'localization') -PathType Container) {
+        return $resolved
     }
+
+    $nestedGame = Join-Path $resolved 'game'
+    if (Test-Path (Join-Path $nestedGame 'localization') -PathType Container) {
+        return (Resolve-Path $nestedGame).Path
+    }
+
+    return $null
+}
+
+function Get-SteamLibraryRoots {
+    $roots = @()
+    $steamPath = $null
 
     try {
         $steamPath = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction Stop).SteamPath
-        if ($steamPath) {
-            $candidates += (Join-Path $steamPath 'steamapps\common\Crusader Kings III\game')
-        }
     } catch {
         # Steam may not be installed for this user.
     }
 
-    foreach ($candidate in $candidates | Select-Object -Unique) {
-        if (Test-Path $candidate) { return (Resolve-Path $candidate).Path }
+    if ($steamPath -and (Test-Path $steamPath)) {
+        $roots += $steamPath
+        $vdf = Join-Path $steamPath 'steamapps\libraryfolders.vdf'
+        if (Test-Path $vdf) {
+            foreach ($line in Get-Content $vdf -ErrorAction SilentlyContinue) {
+                if ($line -match '"path"\s+"([^"]+)"') {
+                    $library = $Matches[1] -replace '\\\\', '\'
+                    if ($library -and (Test-Path $library)) {
+                        $roots += $library
+                    }
+                }
+            }
+        }
+    }
+
+    foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if (-not $root) { continue }
+        $candidate = Join-Path $root 'Steam'
+        if (Test-Path $candidate) { $roots += $candidate }
+    }
+
+    return $roots | Select-Object -Unique
+}
+
+function Find-GameDir {
+    foreach ($root in Get-SteamLibraryRoots) {
+        $candidate = Join-Path $root 'steamapps\common\Crusader Kings III\game'
+        $normalized = Normalize-GameDir $candidate
+        if ($normalized) { return $normalized }
     }
 
     return $null
@@ -105,14 +144,13 @@ if ($gameDir) {
     Write-Host ""
     Write-Host "CK3 installation directory was not found automatically."
     Write-Host "This is optional and is used for localization."
-    Write-Host "Paste the full path to the CK3 'game' folder, or press Enter to skip."
-    $entered = Read-Host 'CK3 game directory'
+    Write-Host "Paste either the CK3 install folder or its 'game' subfolder, or press Enter to skip."
+    $entered = Read-Host 'CK3 installation/game directory'
     if (-not [string]::IsNullOrWhiteSpace($entered)) {
-        $entered = $entered.Trim('"')
-        if (-not (Test-Path $entered -PathType Container)) {
-            throw "Directory does not exist: $entered"
+        $gameDir = Normalize-GameDir $entered
+        if (-not $gameDir) {
+            throw "Could not find CK3 localization under that directory. Expected either '<path>\localization' or '<path>\game\localization'."
         }
-        $gameDir = (Resolve-Path $entered).Path
     }
 }
 
