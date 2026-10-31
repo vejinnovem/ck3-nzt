@@ -44,7 +44,6 @@ jobs:
 
   audit-runtime:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -52,5 +51,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Audit production dependencies
+      - name: Audit production dependencies (report only)
+        continue-on-error: true
         run: npm audit --omit=dev --audit-level=high
