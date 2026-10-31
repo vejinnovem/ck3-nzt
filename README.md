@@ -67,6 +67,51 @@ npm run export
 
 Future updates can be applied by double-clicking `update.cmd` in the application directory or by running `setup.ps1` again.
 
+## First test on Windows
+
+For the first alpha test, use a small throwaway CK3 campaign rather than an important long-running save.
+
+1. Start Crusader Kings III and create or load a normal **non-Ironman** game.
+2. Play briefly if you want the first snapshot to contain some game history.
+3. Create a **manual save**. Do not rely on an autosave for the first test; the current parser cannot decode CK3's binary autosave/Ironman format.
+4. Close CK3 or leave it running. CK3-NZT only reads the save file and does not modify the game or save.
+5. Open PowerShell and run the two-command installer from the Windows quick start section above.
+6. A successful installation ends with a local verification summary. `Lint`, `Build` and `Tests` should each report `PASS`.
+7. Then run:
+
+```powershell
+cd "$env:LOCALAPPDATA\CK3-NZT\app"
+npm run export
+```
+
+A successful first export creates:
+
+```text
+%LOCALAPPDATA%\CK3-NZT\data\memory.sqlite
+%LOCALAPPDATA%\CK3-NZT\export\current.json
+%LOCALAPPDATA%\CK3-NZT\export\changes.json
+%LOCALAPPDATA%\CK3-NZT\export\trends.json
+%LOCALAPPDATA%\CK3-NZT\export\manifest.json
+```
+
+On the first snapshot, `changes.json` may contain no changes because there is no previous state to compare with. To test memory and deltas, return to CK3, let something meaningful change (gold, military strength, vassals, factions, wars, etc.), make another manual save and run `npm run export` again. The second export should preserve both snapshots in SQLite and describe detected differences in `changes.json`.
+
+You can inspect the generated files directly from PowerShell:
+
+```powershell
+Get-Content "$env:LOCALAPPDATA\CK3-NZT\export\manifest.json"
+Get-Content "$env:LOCALAPPDATA\CK3-NZT\export\changes.json"
+```
+
+If CK3-NZT cannot find your save directory automatically, locate the CK3 `save games` folder and set it explicitly for the current PowerShell session:
+
+```powershell
+$env:CK3_SAVE_DIR = "C:\path\to\Crusader Kings III\save games"
+npm run export
+```
+
+Do not put a personal Windows path into repository files or commit it to Git. `CK3_SAVE_DIR` is a local runtime setting only.
+
 ## Local verification
 
 GitHub-hosted CI is intentionally not used. Installation and every normal update run `verify.ps1` locally.
