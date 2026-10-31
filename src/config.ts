@@ -7,6 +7,10 @@ export interface AdvisorConfig {
   gameDir: string | null;
 }
 
+export interface LocalConfig extends AdvisorConfig {
+  outputDir: string | null;
+}
+
 function configFilePath(env: NodeJS.ProcessEnv): string | null {
   if (env.CK3_NZT_CONFIG_FILE) return env.CK3_NZT_CONFIG_FILE;
   if (env.LOCALAPPDATA) return join(env.LOCALAPPDATA, "CK3-NZT", "config.json");
@@ -28,7 +32,7 @@ function normalizeGameDir(path: string | null | undefined): string | null {
   return path;
 }
 
-function loadLocalConfig(env: NodeJS.ProcessEnv): Partial<AdvisorConfig> {
+export function loadLocalConfig(env: NodeJS.ProcessEnv = process.env): Partial<LocalConfig> {
   const path = configFilePath(env);
   if (!path) return {};
 
@@ -42,6 +46,7 @@ function loadLocalConfig(env: NodeJS.ProcessEnv): Partial<AdvisorConfig> {
         typeof parsed.gameDir === "string" && parsed.gameDir
           ? normalizeGameDir(parsed.gameDir)
           : null,
+      outputDir: typeof parsed.outputDir === "string" && parsed.outputDir ? parsed.outputDir : null,
     };
   } catch {
     return {};
