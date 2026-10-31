@@ -29,8 +29,10 @@ export interface StationedReference {
   titleName: string | null;
 }
 
+type DiagnosticPrimitive = string | number | boolean;
+
 export interface MenAtArmsRegimentInfo {
-  /** ID in the top-level army_regiments save block. */
+  /** ID in the global army_regiments save block. */
   id: number;
   /** CK3 Men-at-Arms type key, e.g. bowmen. */
   type: string;
@@ -41,6 +43,12 @@ export interface MenAtArmsRegimentInfo {
   originTitleIds: number[];
   owningTitleIds: number[];
   stationed: StationedReference | null;
+  /**
+   * Small, sanitized set of primitive source fields. Emitted only when some useful
+   * regiment detail is still unresolved, so a real save can teach us new CK3 layouts
+   * without dumping an entire save section.
+   */
+  diagnostics: Record<string, DiagnosticPrimitive> | null;
 }
 
 export interface MenAtArmsSummary {
@@ -53,9 +61,8 @@ export interface MenAtArmsSummary {
   totalMaxSoldiers: number | null;
   regiments: MenAtArmsRegimentInfo[];
   /**
-   * CK3 stores army_regiments and regiments as top-level save blocks. Older or
-   * synthetic fixtures may nest them below armies, so that layout remains a fallback.
-   * Linking is still best-effort because the global records can vary by game version.
+   * CK3 has used both top-level and armies-nested regiment databases across saves/tools.
+   * Linking remains best-effort because global records vary by game version.
    */
   source: "global_armies_best_effort" | "unavailable";
 }
@@ -65,6 +72,26 @@ export interface RallyPointSummary {
   references: number[];
   count: number;
   source: "played_character" | "unavailable";
+}
+
+export interface RaidRecordInfo {
+  /** Key/index of the record in raid/raid. */
+  id: string;
+  /** Best-effort match against the player character or personally held title IDs. */
+  playerRelevant: boolean;
+  /** All numeric references in the record, useful until CK3 raid schema is fully mapped. */
+  numericReferences: number[];
+  /** Sanitized primitive fields only; nested paths are flattened. */
+  fields: Record<string, DiagnosticPrimitive>;
+}
+
+export interface RaidSummary {
+  activeCount: number;
+  playerRelevantCount: number;
+  /** Relevant records first, then other active records, capped to keep snapshots bounded. */
+  records: RaidRecordInfo[];
+  truncated: boolean;
+  source: "raid_save" | "unavailable";
 }
 
 export interface MilitaryInfo {
@@ -85,6 +112,7 @@ export interface MilitaryInfo {
   champions: ChampionSummary;
   menAtArms: MenAtArmsSummary;
   rallyPoints: RallyPointSummary;
+  raids: RaidSummary;
   /**
    * Cross-check only: currentStrength - levies - recovered MAA - champions.
    * A non-zero value can represent hired/special troops or an incomplete MAA link.
@@ -146,9 +174,159 @@ function numericReferences(value: unknown, depth = 0): number[] {
   return Object.values(record).flatMap((entry) => numericReferences(entry, depth + 1));
 }
 
+function objectNodes(value: unknown, depth = 0): Obj[] {
+  if (depth > 6 || value === null || value === undefined) return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => objectNodes(item, depth + 1));
+  }
+  const record = obj(value);
+  if (!record) return [];
+  return [
+    record,
+    ...Object.values(record).flatMap((entry) =>
+      entry !== null && typeof entry === "object" ? objectNodes(entry, depth + 1) : [],
+    ),
+  ];
+}
+
+function firstDirectNumber(record: Obj, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = num(record[key]);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+function sumDirectNumbers(records: Obj[], keys: string[]): number | null {
+  let found = false;
+  let total = 0;
+  for (const record of records) {
+    const value = firstDirectNumber(record, keys);
+    if (value === null) continue;
+    found = true;
+    total += value;
+  }
+  return found ? total : null;
+}
+
+/**
+ * CK3 stores MAA strength on regiment chunks in current saves. Older saves could
+ * collapse equal current/max soldier counts into a single `size` field, so size is a
+ * compatibility fallback for both values. Top-level current/max remains supported for
+ * synthetic and older layouts.
+ */
+function regimentStrength(armyRegiment: Obj, linkedRecords: Obj[]): {
+  current: number | null;
+  max: number | null;
+} {
+  const directCurrent = firstDirectNumber(armyRegiment, [
+    "current",
+    "current_soldiers",
+    "soldiers",
+  ]);
+  const directMax = firstDirectNumber(armyRegiment, ["max", "max_soldiers", "maximum"]);
+
+  const chunkNodes = objectNodes(armyRegiment["chunks"]);
+  const chunkCurrent = sumDirectNumbers(chunkNodes, [
+    "current",
+    "current_soldiers",
+    "soldiers",
+    "men",
+  ]);
+  const chunkMax = sumDirectNumbers(chunkNodes, ["max", "max_soldiers", "maximum"]);
+  const chunkSize = sumDirectNumbers(chunkNodes, ["size"]);
+
+  const linkedCurrent = sumDirectNumbers(linkedRecords, [
+    "current",
+    "current_soldiers",
+    "soldiers",
+    "men",
+  ]);
+  const linkedMax = sumDirectNumbers(linkedRecords, ["max", "max_soldiers", "maximum"]);
+  const linkedSize = sumDirectNumbers(linkedRecords, ["size"]);
+
+  return {
+    current: directCurrent ?? chunkCurrent ?? chunkSize ?? linkedCurrent ?? linkedSize,
+    max: directMax ?? chunkMax ?? chunkSize ?? linkedMax ?? linkedSize,
+  };
+}
+
+function findNumericField(
+  value: unknown,
+  keys: Set<string>,
+  depth = 0,
+): { field: string; id: number } | null {
+  if (depth > 6 || value === null || value === undefined) return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findNumericField(item, keys, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  const record = obj(value);
+  if (!record) return null;
+  for (const [key, entryValue] of Object.entries(record)) {
+    if (keys.has(key)) {
+      const id = num(entryValue);
+      if (id !== null) return { field: key, id };
+    }
+    if (entryValue !== null && typeof entryValue === "object") {
+      const found = findNumericField(entryValue, keys, depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function collectPrimitiveHints(
+  value: unknown,
+  prefix: string,
+  out: Record<string, DiagnosticPrimitive>,
+  depth = 0,
+  limit = 64,
+): void {
+  if (depth > 4 || Object.keys(out).length >= limit || value === null || value === undefined) {
+    return;
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    out[prefix || "value"] = value;
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      collectPrimitiveHints(item, `${prefix}[${index}]`, out, depth + 1, limit);
+    });
+    return;
+  }
+  const record = obj(value);
+  if (!record) return;
+  for (const [key, entryValue] of Object.entries(record)) {
+    if (Object.keys(out).length >= limit) break;
+    collectPrimitiveHints(
+      entryValue,
+      prefix ? `${prefix}.${key}` : key,
+      out,
+      depth + 1,
+      limit,
+    );
+  }
+}
+
+function unresolvedRegimentDiagnostics(
+  armyRegiment: Obj,
+  linkedRecords: Obj[],
+): Record<string, DiagnosticPrimitive> {
+  const hints: Record<string, DiagnosticPrimitive> = {};
+  collectPrimitiveHints(armyRegiment, "armyRegiment", hints);
+  linkedRecords.forEach((record, index) => {
+    collectPrimitiveHints(record, `linked[${index}]`, hints);
+  });
+  return hints;
+}
+
 function extractMenAtArms(q: Query, playerId: number, loc: Localizer): MenAtArmsSummary {
-  // In real CK3 saves these are sibling top-level blocks, not children of `armies`.
-  // Keep the nested layout as a compatibility fallback for older/synthetic fixtures.
+  // Prefer top-level DBs seen in current campaign saves, retain /armies/* as fallback.
   const armyRegiments = obj(q.at("/army_regiments")) ?? obj(q.at("/armies/army_regiments"));
   const regiments = obj(q.at("/regiments")) ?? obj(q.at("/armies/regiments"));
   if (!armyRegiments || !regiments) {
@@ -190,30 +368,28 @@ function extractMenAtArms(q: Query, playerId: number, loc: Localizer): MenAtArms
       linkedRecords.flatMap((entry) => numbersForKey(entry, "owning_title")),
     );
 
-    const current = num(armyRegiment["current"]);
-    const max = num(armyRegiment["max"]);
-    let stationed: StationedReference | null = null;
-    const stationKeys = [
+    const { current, max } = regimentStrength(armyRegiment, linkedRecords);
+
+    const stationKeys = new Set([
       "stationed_title",
       "stationed_holding",
       "stationed_barony",
       "stationed_province",
       "stationed_at",
       "stationed",
-    ];
+      "station",
+    ]);
+    let stationed: StationedReference | null = null;
     for (const record of [armyRegiment, ...linkedRecords]) {
-      for (const key of stationKeys) {
-        const stationId = num(record[key]);
-        if (stationId === null) continue;
-        const titleKey = q.at(`/landed_titles/landed_titles/${stationId}/key`);
-        stationed = {
-          field: key,
-          id: stationId,
-          titleName: typeof titleKey === "string" ? resolveTitleName(q, loc, stationId) : null,
-        };
-        break;
-      }
-      if (stationed) break;
+      const station = findNumericField(record, stationKeys);
+      if (!station) continue;
+      const titleKey = q.at(`/landed_titles/landed_titles/${station.id}/key`);
+      stationed = {
+        field: station.field,
+        id: station.id,
+        titleName: typeof titleKey === "string" ? resolveTitleName(q, loc, station.id) : null,
+      };
+      break;
     }
 
     result.push({
@@ -226,6 +402,10 @@ function extractMenAtArms(q: Query, playerId: number, loc: Localizer): MenAtArms
       originTitleIds,
       owningTitleIds,
       stationed,
+      diagnostics:
+        current === null || max === null || stationed === null
+          ? unresolvedRegimentDiagnostics(armyRegiment, linkedRecords)
+          : null,
     });
   }
 
@@ -240,6 +420,59 @@ function extractMenAtArms(q: Query, playerId: number, loc: Localizer): MenAtArms
       : null,
     regiments: result,
     source: "global_armies_best_effort",
+  };
+}
+
+function collectionEntries(value: unknown): Array<[string, Obj]> {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry, index) => {
+      const record = obj(entry);
+      return record ? [[String(index), record] as [string, Obj]] : [];
+    });
+  }
+  const record = obj(value);
+  if (!record) return [];
+  return Object.entries(record).flatMap(([key, entry]) => {
+    const child = obj(entry);
+    return child ? [[key, child] as [string, Obj]] : [];
+  });
+}
+
+function extractRaids(q: Query, playerId: number): RaidSummary {
+  const rawRaids = q.at("/raid/raid");
+  if (rawRaids === undefined) {
+    return {
+      activeCount: 0,
+      playerRelevantCount: 0,
+      records: [],
+      truncated: false,
+      source: "unavailable",
+    };
+  }
+
+  const domainIds = new Set(numberList(q.at(`/living/${playerId}/landed_data/domain`)));
+  const records = collectionEntries(rawRaids).map(([id, record]): RaidRecordInfo => {
+    const numericRefs = unique(numericReferences(record));
+    const playerRelevant =
+      numericRefs.includes(playerId) || numericRefs.some((reference) => domainIds.has(reference));
+    const fields: Record<string, DiagnosticPrimitive> = {};
+    collectPrimitiveHints(record, "", fields, 0, 48);
+    return {
+      id,
+      playerRelevant,
+      numericReferences: numericRefs,
+      fields,
+    };
+  });
+
+  records.sort((a, b) => Number(b.playerRelevant) - Number(a.playerRelevant));
+  const maxRecords = 25;
+  return {
+    activeCount: records.length,
+    playerRelevantCount: records.filter((record) => record.playerRelevant).length,
+    records: records.slice(0, maxRecords),
+    truncated: records.length > maxRecords,
+    source: "raid_save",
   };
 }
 
@@ -269,6 +502,7 @@ export function extractMilitary(q: Query, loc: Localizer): MilitaryInfo {
     count: rallyReferences.length,
     source: rawRallyPoints === undefined ? "unavailable" : "played_character",
   };
+  const raids = extractRaids(q, playerId);
 
   const unattributedCurrentStrength =
     currentStrength !== null && levy !== null && menAtArms.source !== "unavailable"
@@ -308,6 +542,7 @@ export function extractMilitary(q: Query, loc: Localizer): MilitaryInfo {
     champions,
     menAtArms,
     rallyPoints,
+    raids,
     unattributedCurrentStrength,
     wars,
   };
