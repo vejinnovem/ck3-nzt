@@ -9,10 +9,11 @@ traits_lookup={ "diligent" }
 council_task_manager={
  active={
   100={ type="task_manage_domain" owner=11 court_owner=10 }
+  101={ type="task_train_commanders" owner=12 court_owner=10 }
  }
 }
 living={
- 10={ first_name="Ruler" birth=830.1.1 landed_data={ council={ 11 12 } } }
+ 10={ first_name="Ruler" birth=830.1.1 landed_data={ council={ 100 101 } } }
  11={
   first_name="Steward"
   birth=835.1.1
@@ -24,7 +25,7 @@ living={
   first_name="Marshal"
   birth=836.1.1
   skill={ 3 14 5 4 3 8 }
-  court_data={ employer=10 }
+  court_data={ employer=10 council_task=101 }
  }
  13={
   first_name="Diplomat"
@@ -47,8 +48,9 @@ living={
 }
 `);
 
-test("extractCouncil returns councillors, active tasks and adult court candidates", async () => {
+test("extractCouncil resolves landed council task IDs to councillor characters", async () => {
   const council = await queryGamestate(GS, (q) => extractCouncil(q, new Localizer(null)));
+  expect(council.taskIds).toEqual([100, 101]);
   expect(council.memberIds).toEqual([11, 12]);
   expect(council.members.map((member) => member.name)).toEqual(["Steward", "Marshal"]);
   expect(council.members[0]?.activeTask).toEqual({
@@ -57,6 +59,7 @@ test("extractCouncil returns councillors, active tasks and adult court candidate
     ownerId: 11,
     courtOwnerId: 10,
   });
+  expect(council.members[1]?.activeTask?.type).toBe("task_train_commanders");
   expect(council.courtSize).toBe(4);
   expect(council.candidates.map((candidate) => candidate.name)).toEqual([
     "Diplomat",
