@@ -14,10 +14,20 @@ export interface War {
 }
 
 export interface MilitaryInfo {
+  /** Raw values stored in living/<ruler>/landed_data. */
   levy: number | null;
   strength: number | null;
   currentStrength: number | null;
   strengthWithoutHires: number | null;
+  power: number | null;
+  maxPower: number | null;
+  /**
+   * Player-visible strength after dynamic/static modifiers. Save-only extraction cannot
+   * reconstruct this reliably yet, so null is intentional rather than pretending raw
+   * landed_data strength equals the top-bar value.
+   */
+  effectiveStrength: number | null;
+  strengthSource: "landed_data_raw";
   wars: War[];
 }
 
@@ -33,6 +43,8 @@ export function extractMilitary(q: Query, loc: Localizer): MilitaryInfo {
   const strength = num(q.at(`${landedData}/strength`));
   const currentStrength = num(q.at(`${landedData}/current_strength`));
   const strengthWithoutHires = num(q.at(`${landedData}/strength_without_hires`));
+  const power = num(q.at(`${landedData}/power`));
+  const maxPower = num(q.at(`${landedData}/max_power`));
 
   const wars: War[] = [];
 
@@ -55,5 +67,15 @@ export function extractMilitary(q: Query, loc: Localizer): MilitaryInfo {
     wars.push({ playerSide, cbType, targetTitle, attackerScore, defenderScore, startDate });
   });
 
-  return { levy, strength, currentStrength, strengthWithoutHires, wars };
+  return {
+    levy,
+    strength,
+    currentStrength,
+    strengthWithoutHires,
+    power,
+    maxPower,
+    effectiveStrength: null,
+    strengthSource: "landed_data_raw",
+    wars,
+  };
 }
