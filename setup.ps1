@@ -1,6 +1,7 @@
 param(
     [string]$InstallDir = "",
-    [switch]$SkipTests,
+    [Alias("SkipTests")]
+    [switch]$SkipVerification,
     [switch]$ExportAfterBuild
 )
 
@@ -134,14 +135,16 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "npm ci failed." }
     }
 
-    Write-Host "Building CK3-NZT..."
-    npm run build
-    if ($LASTEXITCODE -ne 0) { throw "Build failed." }
-
-    if (-not $SkipTests) {
-        Write-Host "Running tests..."
-        npm test
-        if ($LASTEXITCODE -ne 0) { throw "Tests failed." }
+    if (-not $SkipVerification) {
+        Write-Host "Running local verification..."
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $InstallDir "verify.ps1")
+        if ($LASTEXITCODE -ne 0) {
+            throw "Local verification failed. Review the summary above."
+        }
+    } else {
+        Write-Host "Verification skipped; building CK3-NZT..."
+        npm run build
+        if ($LASTEXITCODE -ne 0) { throw "Build failed." }
     }
 
     if ($ExportAfterBuild) {

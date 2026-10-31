@@ -43,7 +43,7 @@ SQLite is the durable source of historical data. The AI does not need to ingest 
 
 ## Windows quick start
 
-CK3-NZT includes an idempotent PowerShell installer/updater. It installs Git and a current Node.js LTS release through WinGet when necessary, clones the repository, installs npm dependencies, builds the project and runs the tests.
+CK3-NZT includes an idempotent PowerShell installer/updater. It installs Git and a current Node.js LTS release through WinGet when necessary, clones the repository, installs npm dependencies and runs the full verification suite locally.
 
 Download and run it from PowerShell:
 
@@ -66,6 +66,27 @@ npm run export
 ```
 
 Future updates can be applied by double-clicking `update.cmd` in the application directory or by running `setup.ps1` again.
+
+## Local verification
+
+GitHub-hosted CI is intentionally not used. Installation and every normal update run `verify.ps1` locally.
+
+The checks are executed independently:
+
+```text
+format check
+lint
+build
+tests
+```
+
+A failure in one check does not prevent the remaining checks from running. A combined PASS/FAIL summary is printed at the end and the installer/updater exits with an error if any check failed.
+
+You can also run the verification manually:
+
+```powershell
+.\verify.ps1
+```
 
 ## Local data and privacy
 
