@@ -122,6 +122,80 @@ function Resolve-OutputDir([string]$Entered, [string]$Fallback) {
     }
 }
 
+function Get-GoogleDriveRoots {
+    $roots = @()
+
+    try {
+        foreach ($disk in Get-CimInstance Win32_LogicalDisk -ErrorAction Stop) {
+            if (-not $disk.DeviceID) { continue }
+            $label = [string]$disk.VolumeName
+            if ($label -match 'Google Drive') {
+                $candidate = "$($disk.DeviceID)\"
+                if (Test-Path $candidate) { $roots += $candidate }
+            }
+        }
+    } catch {
+        # CIM may be unavailable in restricted environments; PSDrive is a fallback.
+    }
+
+    try {
+        foreach ($drive in Get-PSDrive -PSProvider FileSystem -ErrorAction Stop) {
+            if ([string]$drive.Description -match 'Google Drive') {
+                if (Test-Path $drive.Root) { $roots += $drive.Root }
+            }
+        }
+    } catch {
+        # Ignore and fall back to manual path entry.
+    }
+
+    return @($roots | Select-Object -Unique)
+}
+
+function Select-NumberedPath([string]$Title, [array]$Items) {
+    if ($Items.Count -eq 0) { return $null }
+    if ($Items.Count -eq 1) { return [string]$Items[0] }
+
+    Write-Host ""
+    Write-Host $Title
+    for ($i = 0; $i -lt $Items.Count; $i++) {
+        Write-Host ("[{0}] {1}" -f ($i + 1), $Items[$i])
+    }
+
+    while ($true) {
+        $choice = Read-Host 'Select number'
+        $number = 0
+        if ([int]::TryParse($choice, [ref]$number) -and $number -ge 1 -and $number -le $Items.Count) {
+            return [string]$Items[$number - 1]
+        }
+        Write-Host "Enter a number from 1 to $($Items.Count)."
+    }
+}
+
+function Find-GoogleDriveExportDir {
+    $roots = @(Get-GoogleDriveRoots)
+    if ($roots.Count -eq 0) { return $null }
+
+    $root = Select-NumberedPath 'Multiple Google Drive mount points were found:' $roots
+    if (-not $root) { return $null }
+
+    $topLevelDirs = @(
+        Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+            Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::Hidden) } |
+            ForEach-Object { $_.FullName }
+    )
+
+    if ($topLevelDirs.Count -eq 0) {
+        return $null
+    }
+
+    $personalRoot = Select-NumberedPath 'Select the Google Drive area where CK3-NZK should be created:' $topLevelDirs
+    if (-not $personalRoot) { return $null }
+
+    $target = Join-Path $personalRoot 'CK3-NZK'
+    New-Item -ItemType Directory -Force -Path $target | Out-Null
+    return (Resolve-Path $target).Path
+}
+
 $configDir = Join-Path $env:LOCALAPPDATA 'CK3-NZT'
 $configPath = Join-Path $configDir 'config.json'
 $defaultOutputDir = Join-Path $configDir 'export'
@@ -188,11 +262,21 @@ if ($existingConfig -and $existingConfig.outputDir) {
 
 Write-Host ""
 Write-Host "AI export directory"
-Write-Host "CK3-NZT can keep the compact AI files locally or write them directly into a synced folder."
-Write-Host "For Google Drive for desktop, create a folder such as 'CK3-NZT' inside My Drive and paste its Windows path here."
-Write-Host "Current/default: $currentOutputDir"
-$enteredOutput = Read-Host 'AI export directory (press Enter to keep current/default)'
-$outputDir = Resolve-OutputDir $enteredOutput $currentOutputDir
+Write-Host "CK3-NZT can keep compact AI files locally or write them directly into Google Drive."
+$googleOutputDir = Find-GoogleDriveExportDir
+if ($googleOutputDir) {
+    Write-Host "Detected Google Drive export directory: $googleOutputDir"
+    $useGoogle = Read-Host 'Use this directory for AI exports? [Y/n]'
+    if ([string]::IsNullOrWhiteSpace($useGoogle) -or $useGoogle -match '^[YyTt]') {
+        $outputDir = $googleOutputDir
+    }
+}
+
+if (-not $outputDir) {
+    Write-Host "Current/default: $currentOutputDir"
+    $enteredOutput = Read-Host 'AI export directory (press Enter to keep current/default)'
+    $outputDir = Resolve-OutputDir $enteredOutput $currentOutputDir
+}
 
 New-Item -ItemType Directory -Force -Path $configDir | Out-Null
 
