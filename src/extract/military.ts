@@ -147,33 +147,6 @@ function numericReferences(value: unknown, depth = 0): number[] {
   return Object.values(record).flatMap((entry) => numericReferences(entry, depth + 1));
 }
 
-function stationReference(q: Query, values: unknown[]): StationedReference | null {
-  const keys = [
-    "stationed_title",
-    "stationed_holding",
-    "stationed_barony",
-    "stationed_province",
-    "stationed_at",
-    "stationed",
-  ];
-  for (const value of values) {
-    const record = obj(value);
-    if (!record) continue;
-    for (const key of keys) {
-      const id = num(record[key]);
-      if (id === null) continue;
-      const titleKey = q.at(`/landed_titles/landed_titles/${id}/key`);
-      return {
-        field: key,
-        id,
-        titleName:
-          typeof titleKey === "string" ? resolveTitleName(q, { resolve: (x: string) => x } as Localizer, id) : null,
-      };
-    }
-  }
-  return null;
-}
-
 function extractMenAtArms(q: Query, playerId: number, loc: Localizer): MenAtArmsSummary {
   const armyRegiments = obj(q.at("/armies/army_regiments"));
   const regiments = obj(q.at("/armies/regiments"));
@@ -194,7 +167,7 @@ function extractMenAtArms(q: Query, playerId: number, loc: Localizer): MenAtArms
     const armyRegiment = obj(rawArmyRegiment);
     if (!armyRegiment) continue;
     const type = typeof armyRegiment["type"] === "string" ? armyRegiment["type"] : null;
-    if (!type) continue; // levies/knights do not carry a MAA type key
+    if (!type) continue;
 
     const linkedRegimentIds = unique(numbersForKey(armyRegiment, "regiment"));
     const linkedRecords = linkedRegimentIds
