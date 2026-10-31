@@ -8,7 +8,7 @@ played_character={ character=10 player=1 }
 landed_titles={
  landed_titles={
   1={ key="d_test" name="Test Duchy" holder=10 }
-  2={ key="c_alpha" name="Alpha" holder=10 de_jure_liege=1 capital=3 }
+  2={ key="c_alpha" name="Alpha" holder=10 de_jure_liege=1 capital=2 }
   3={ key="b_alpha" name="Alpha Hold" holder=10 de_jure_liege=2 capital_barony=yes }
   4={ key="c_beta" name="Beta" holder=10 de_jure_liege=1 capital=5 }
   5={ key="b_beta" name="Beta Hold" holder=10 de_jure_liege=4 capital_barony=yes }
