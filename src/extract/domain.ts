@@ -7,6 +7,7 @@ export interface DomainCountyInfo {
   key: string;
   name: string;
   development: number | null;
+  control: number | null;
   cultureId: number | null;
   faithId: number | null;
   capitalTitleId: number | null;
@@ -87,11 +88,14 @@ export function extractRealmEconomy(q: Query, loc: Localizer): RealmEconomyInfo 
 
     const countyPath = `/county_manager/counties/${key}`;
     const capitalTitleId = capitalBaronyForCounty(q, titleId, domain);
+    const control =
+      numberOrNull(q.at(`${countyPath}/county_control`)) ?? numberOrNull(q.at(`${countyPath}/control`));
     counties.push({
       titleId,
       key,
       name: resolveTitleName(q, loc, titleId),
       development: numberOrNull(q.at(`${countyPath}/development`)),
+      control,
       cultureId: numberOrNull(q.at(`${countyPath}/culture`)),
       faithId: numberOrNull(q.at(`${countyPath}/faith`)),
       capitalTitleId,
