@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -62,6 +62,7 @@ export interface PersistResult {
   outputDir: string;
   databasePath: string;
   written: boolean;
+  refreshed: boolean;
   changeCount: number;
 }
 
@@ -72,6 +73,12 @@ interface TrendRow {
   vassal_count: number;
   faction_count: number;
   max_faction_ratio: number | null;
+}
+
+interface StoredSnapshotRow {
+  id: number;
+  game_date: string;
+  snapshot_json: string;
 }
 
 export function resolveDataDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -247,12 +254,79 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   }
 }
 
-async function readSnapshot(path: string): Promise<Snapshot | null> {
+function parseStoredSnapshot(row: StoredSnapshotRow | undefined): Snapshot | null {
+  if (!row) return null;
   try {
-    return JSON.parse(await readFile(path, "utf8")) as Snapshot;
+    return JSON.parse(row.snapshot_json) as Snapshot;
   } catch {
     return null;
   }
+}
+
+function previousStoredSnapshot(db: DatabaseSync, beforeId?: number): StoredSnapshotRow | undefined {
+  if (beforeId !== undefined) {
+    return db
+      .prepare(
+        "SELECT id, game_date, snapshot_json FROM snapshots WHERE id < ? ORDER BY id DESC LIMIT 1",
+      )
+      .get(beforeId) as StoredSnapshotRow | undefined;
+  }
+
+  return db
+    .prepare("SELECT id, game_date, snapshot_json FROM snapshots ORDER BY id DESC LIMIT 1")
+    .get() as StoredSnapshotRow | undefined;
+}
+
+function insertChanges(db: DatabaseSync, snapshotId: number, changes: ChangeSet): void {
+  const insertChange = db.prepare(`
+    INSERT INTO changes (snapshot_id, key, before_json, after_json, delta)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+
+  for (const change of changes.changes) {
+    insertChange.run(
+      snapshotId,
+      change.key,
+      JSON.stringify(change.before),
+      JSON.stringify(change.after),
+      change.delta ?? null,
+    );
+  }
+}
+
+async function writeExports(
+  db: DatabaseSync,
+  outputDir: string,
+  snapshot: Snapshot,
+  snapshotId: number,
+  sourceFingerprint: string,
+  changes: ChangeSet,
+  generatedAt: string,
+  previousGameDate: string | null,
+): Promise<void> {
+  const trendRows = db
+    .prepare(`
+      SELECT game_date, gold, military_strength, vassal_count, faction_count, max_faction_ratio
+      FROM snapshots
+      ORDER BY id DESC
+      LIMIT 20
+    `)
+    .all() as unknown as TrendRow[];
+  const trends = buildTrends(trendRows);
+
+  const manifest: MemoryManifest = {
+    schemaVersion: 1,
+    snapshotId,
+    sourceFingerprint,
+    gameDate: snapshot.date,
+    generatedAt,
+    previousGameDate,
+  };
+
+  await writeJsonAtomic(join(outputDir, "current.json"), snapshot);
+  await writeJsonAtomic(join(outputDir, "changes.json"), changes);
+  await writeJsonAtomic(join(outputDir, "trends.json"), trends);
+  await writeJsonAtomic(join(outputDir, "manifest.json"), manifest);
 }
 
 export async function persistSnapshot(
@@ -269,12 +343,68 @@ export async function persistSnapshot(
 
   try {
     const duplicate = db
-      .prepare("SELECT id FROM snapshots WHERE source_fingerprint = ?")
-      .get(options.sourceFingerprint) as { id: number } | undefined;
-    if (duplicate) return { outputDir, databasePath, written: false, changeCount: 0 };
+      .prepare("SELECT id, game_date, snapshot_json FROM snapshots WHERE source_fingerprint = ?")
+      .get(options.sourceFingerprint) as StoredSnapshotRow | undefined;
 
-    const currentPath = join(outputDir, "current.json");
-    const previous = await readSnapshot(currentPath);
+    if (duplicate) {
+      const previousRow = previousStoredSnapshot(db, duplicate.id);
+      const previous = parseStoredSnapshot(previousRow);
+      const changes = buildChanges(previous, snapshot);
+      const maxFactionRatio = maxFactionPowerRatio(snapshot);
+      const generatedAt = new Date().toISOString();
+
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.prepare(`
+          UPDATE snapshots SET
+            game_date = ?, parsed_at = ?, ruler_name = ?, primary_title = ?,
+            gold = ?, military_strength = ?, current_strength = ?,
+            vassal_count = ?, faction_count = ?, max_faction_ratio = ?, snapshot_json = ?
+          WHERE id = ?
+        `).run(
+          snapshot.date,
+          snapshot.parsedAt,
+          snapshot.overview.rulerName,
+          snapshot.overview.primaryTitle,
+          snapshot.overview.gold,
+          snapshot.military.strength,
+          snapshot.military.currentStrength,
+          snapshot.vassalCount,
+          snapshot.factions.length,
+          maxFactionRatio,
+          JSON.stringify(snapshot),
+          duplicate.id,
+        );
+        db.prepare("DELETE FROM changes WHERE snapshot_id = ?").run(duplicate.id);
+        insertChanges(db, duplicate.id, changes);
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+
+      await writeExports(
+        db,
+        outputDir,
+        snapshot,
+        duplicate.id,
+        options.sourceFingerprint,
+        changes,
+        generatedAt,
+        previous?.date ?? null,
+      );
+
+      return {
+        outputDir,
+        databasePath,
+        written: false,
+        refreshed: true,
+        changeCount: changes.changes.length,
+      };
+    }
+
+    const previousRow = previousStoredSnapshot(db);
+    const previous = parseStoredSnapshot(previousRow);
     const changes = buildChanges(previous, snapshot);
     const maxFactionRatio = maxFactionPowerRatio(snapshot);
     const createdAt = new Date().toISOString();
@@ -306,54 +436,29 @@ export async function persistSnapshot(
           createdAt,
         );
       snapshotId = Number(result.lastInsertRowid);
-
-      const insertChange = db.prepare(`
-        INSERT INTO changes (snapshot_id, key, before_json, after_json, delta)
-        VALUES (?, ?, ?, ?, ?)
-      `);
-      for (const change of changes.changes) {
-        insertChange.run(
-          snapshotId,
-          change.key,
-          JSON.stringify(change.before),
-          JSON.stringify(change.after),
-          change.delta ?? null,
-        );
-      }
+      insertChanges(db, snapshotId, changes);
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;
     }
 
-    const trendRows = db
-      .prepare(`
-        SELECT game_date, gold, military_strength, vassal_count, faction_count, max_faction_ratio
-        FROM snapshots
-        ORDER BY id DESC
-        LIMIT 20
-      `)
-      .all() as unknown as TrendRow[];
-    const trends = buildTrends(trendRows);
-
-    const manifest: MemoryManifest = {
-      schemaVersion: 1,
+    await writeExports(
+      db,
+      outputDir,
+      snapshot,
       snapshotId,
-      sourceFingerprint: options.sourceFingerprint,
-      gameDate: snapshot.date,
-      generatedAt: createdAt,
-      previousGameDate: previous?.date ?? null,
-    };
-
-    await writeJsonAtomic(currentPath, snapshot);
-    await writeJsonAtomic(join(outputDir, "changes.json"), changes);
-    await writeJsonAtomic(join(outputDir, "trends.json"), trends);
-    await writeJsonAtomic(join(outputDir, "manifest.json"), manifest);
+      options.sourceFingerprint,
+      changes,
+      createdAt,
+      previous?.date ?? null,
+    );
 
     return {
       outputDir,
       databasePath,
       written: true,
+      refreshed: false,
       changeCount: changes.changes.length,
     };
   } finally {
