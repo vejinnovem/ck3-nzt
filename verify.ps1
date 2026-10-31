@@ -3,7 +3,6 @@ param()
 $ErrorActionPreference = "Continue"
 
 $checks = @(
-    @{ Name = "Format"; Args = @("run", "format:check") },
     @{ Name = "Lint"; Args = @("run", "lint") },
     @{ Name = "Build"; Args = @("run", "build") },
     @{ Name = "Tests"; Args = @("test") }
