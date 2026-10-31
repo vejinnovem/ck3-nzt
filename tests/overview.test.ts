@@ -18,3 +18,17 @@ test("buildSnapshot extracts the realm overview", async () => {
   expect(snap.date).toBe("1130.7.24");
   expect(snap.parsedAt).toBeGreaterThan(0);
 });
+
+test("buildSnapshot emits ruler and immediate family advisory sections", async () => {
+  const snap = await buildSnapshot(GS, new Localizer(null));
+  expect(snap.ruler?.id).toBe(33564206);
+  expect(snap.ruler?.name).toBe("Jenec");
+  expect(snap.ruler?.income).toBe(12.3);
+  expect(snap.family).toEqual({
+    primarySpouse: null,
+    spouses: [],
+    betrothed: null,
+    children: [],
+    primaryHeirId: 22222,
+  });
+});

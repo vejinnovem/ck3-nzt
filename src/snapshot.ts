@@ -12,6 +12,12 @@ import {
 } from "./extract/vassals.js";
 import { extractExpansion, type ExpansionInfo } from "./extract/expansion.js";
 import { extractTitles, type TitlesInfo } from "./extract/titles.js";
+import {
+  extractCharacter,
+  extractImmediateFamily,
+  type CharacterInfo,
+  type ImmediateFamilyInfo,
+} from "./extract/characters.js";
 
 export interface RealmOverview {
   rulerName: string;
@@ -27,6 +33,10 @@ export interface Snapshot {
   date: string;
   parsedAt: number;
   overview: RealmOverview;
+  // Optional in the TypeScript interface so older stored/test snapshots remain readable.
+  // buildSnapshot always emits both fields for new snapshots.
+  ruler?: CharacterInfo | null;
+  family?: ImmediateFamilyInfo;
   military: MilitaryInfo;
   succession: SuccessionInfo;
   diplomacy: DiplomacyInfo;
@@ -49,6 +59,9 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
     loc.setTraitLookup((q.at("/traits_lookup") as string[]) ?? null);
     const date = formatCk3Date(q.at("/date"));
     const playerId = q.at("/played_character/character");
+    if (typeof playerId !== "number") {
+      throw new Error("CK3 save does not contain a numeric played_character/character id");
+    }
     const alive = `/living/${playerId}/alive_data`;
     const overview: RealmOverview = {
       rulerName: str(q.at("/meta_data/meta_player_name")),
@@ -60,6 +73,8 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
       prestige: num(q.at(`${alive}/prestige/accumulated`)),
       piety: num(q.at(`${alive}/piety/accumulated`)),
     };
+    const ruler = extractCharacter(q, loc, playerId);
+    const family = extractImmediateFamily(q, loc, playerId);
     const military = extractMilitary(q, loc);
     const expansion = extractExpansion(q, loc, military.wars);
     const succession = extractSuccession(q, loc);
@@ -71,6 +86,8 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
       date,
       parsedAt: Date.now(),
       overview,
+      ruler,
+      family,
       military,
       expansion,
       succession,
