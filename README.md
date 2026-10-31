@@ -45,11 +45,20 @@ SQLite is the durable source of historical data. The AI does not need to ingest 
 
 CK3-NZT includes an idempotent PowerShell installer/updater. It installs Git and a current Node.js LTS release through WinGet when necessary, clones the repository, installs npm dependencies and runs the verification suite locally.
 
-Download and run it from PowerShell:
+Open **Windows PowerShell** and run:
 
 ```powershell
 iwr https://raw.githubusercontent.com/vejinnovem/ck3-nzt/main/setup.ps1 -OutFile "$env:TEMP\ck3-nzt-setup.ps1"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\ck3-nzt-setup.ps1"
+Set-ExecutionPolicy -Scope Process Bypass -Force
+& "$env:TEMP\ck3-nzt-setup.ps1"
+```
+
+Run the script in the current PowerShell session as shown above. This matters on the first install: if Git or Node.js has just been installed, the script refreshes `PATH` for that session so `git`, `node` and `npm` are immediately available afterwards.
+
+If you previously launched setup through a separate command such as `powershell.exe -File ...`, the parent PowerShell window can still have the old `PATH`. Either open a new PowerShell window or refresh it manually:
+
+```powershell
+$env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
 ```
 
 Default application location:
@@ -75,7 +84,7 @@ For the first alpha test, use a small throwaway CK3 campaign rather than an impo
 2. Play briefly if you want the first snapshot to contain some game history.
 3. Create a **manual save**. Do not rely on an autosave for the first test; the current parser cannot decode CK3's binary autosave/Ironman format.
 4. Close CK3 or leave it running. CK3-NZT only reads the save file and does not modify the game or save.
-5. Open PowerShell and run the two-command installer from the Windows quick start section above.
+5. Open PowerShell and run the three-command installer from the Windows quick start section above.
 6. A successful installation ends with a local verification summary. `Lint`, `Build` and `Tests` should each report `PASS`.
 7. Then run:
 
