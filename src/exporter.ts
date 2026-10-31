@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
+import { basename } from "node:path";
 import { resolveConfig, discoverGameDir, discoverSaveDir } from "./config.js";
 import { extractGamestate, IronmanError } from "./envelope.js";
 import { Localizer } from "./localization.js";
@@ -22,6 +23,12 @@ async function main(): Promise<void> {
   const gamestate = extractGamestate(save);
   const gameDir = cfg.gameDir ?? (await discoverGameDir());
   const snapshot = await buildSnapshot(gamestate, new Localizer(gameDir));
+
+  // Deliberately print only the save filename, not the absolute path, so the
+  // confirmation is useful without exposing the local Windows username/path.
+  console.log(
+    `Read save: ${basename(ref.path)} | game date: ${snapshot.date} | ruler: ${snapshot.overview.rulerName} | title: ${snapshot.overview.primaryTitle}`,
+  );
 
   // Intentionally excludes the absolute save path and Windows username.
   const sourceFingerprint = createHash("sha256")
