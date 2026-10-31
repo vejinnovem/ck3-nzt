@@ -1,7 +1,7 @@
 {
-  "name": "ck3-nzt",
-  "version": "0.2.0-alpha.1",
-  "description": "Persistent strategic memory and AI advisory bridge for Crusader Kings III.",
+  "name": "ck3-strategy-advisor",
+  "version": "0.1.2",
+  "description": "CK3-NZT: persistent strategic memory and AI advisory bridge for Crusader Kings III.",
   "type": "module",
   "license": "MIT",
   "author": "CK3-NZT contributors",
@@ -14,20 +14,19 @@
     "url": "https://github.com/vejinnovem/ck3-nzt/issues"
   },
   "keywords": [
+    "mcp",
+    "model-context-protocol",
     "crusader-kings-iii",
     "ck3",
     "strategy",
     "ai",
-    "mcp",
-    "model-context-protocol",
     "paradox"
   ],
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22"
   },
   "bin": {
-    "ck3-advisor": "dist/index.js",
-    "ck3-nzt-export": "dist/exporter.js"
+    "ck3-advisor": "dist/index.js"
   },
   "files": [
     "dist"
