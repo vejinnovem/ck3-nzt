@@ -18,6 +18,8 @@ import {
   type CharacterInfo,
   type ImmediateFamilyInfo,
 } from "./extract/characters.js";
+import { extractRealmEconomy, type RealmEconomyInfo } from "./extract/domain.js";
+import { extractCouncil, type CouncilInfo } from "./extract/council.js";
 
 export interface RealmOverview {
   rulerName: string;
@@ -34,9 +36,11 @@ export interface Snapshot {
   parsedAt: number;
   overview: RealmOverview;
   // Optional in the TypeScript interface so older stored/test snapshots remain readable.
-  // buildSnapshot always emits both fields for new snapshots.
+  // buildSnapshot always emits these advisory sections for new snapshots.
   ruler?: CharacterInfo | null;
   family?: ImmediateFamilyInfo;
+  economy?: RealmEconomyInfo;
+  council?: CouncilInfo;
   military: MilitaryInfo;
   succession: SuccessionInfo;
   diplomacy: DiplomacyInfo;
@@ -75,6 +79,8 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
     };
     const ruler = extractCharacter(q, loc, playerId);
     const family = extractImmediateFamily(q, loc, playerId);
+    const economy = extractRealmEconomy(q, loc);
+    const council = extractCouncil(q, loc);
     const military = extractMilitary(q, loc);
     const expansion = extractExpansion(q, loc, military.wars);
     const succession = extractSuccession(q, loc);
@@ -88,6 +94,8 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
       overview,
       ruler,
       family,
+      economy,
+      council,
       military,
       expansion,
       succession,

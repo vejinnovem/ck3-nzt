@@ -32,3 +32,12 @@ test("buildSnapshot emits ruler and immediate family advisory sections", async (
     primaryHeirId: 22222,
   });
 });
+
+test("buildSnapshot emits economy and council advisory sections", async () => {
+  const snap = await buildSnapshot(GS, new Localizer(null));
+  expect(snap.economy?.gold).toBe(124.5);
+  expect(snap.economy?.monthlyIncome).toBe(12.3);
+  expect(snap.economy?.heldTitleCount).toBe(2);
+  expect(snap.council?.memberIds).toEqual([22222]);
+  expect(snap.council?.members[0]?.name).toBe("Adela");
+});

@@ -18,6 +18,11 @@ export interface CharacterInfo {
   female: boolean;
   cultureId: number | null;
   faithId: number | null;
+  spouseIds: number[];
+  betrothedId: number | null;
+  isMarried: boolean;
+  employerId: number | null;
+  councilTaskId: number | null;
   skills: {
     diplomacy: number;
     martial: number;
@@ -113,11 +118,9 @@ export function extractCharacter(q: Query, loc: Localizer, id: number): Characte
   const firstName = q.at(`${base}/first_name`);
   if (firstName === undefined) return null;
 
-  // Set trait lookup for this parse.
   const traitsLookup = q.at("/traits_lookup") as string[] | null | undefined;
   loc.setTraitLookup(traitsLookup ?? null);
 
-  // Skills: array[6] = diplomacy, martial, stewardship, intrigue, learning, prowess.
   const skillArr = (q.at(`${base}/skill`) as number[] | undefined) ?? [];
   const skills = {
     diplomacy: skillArr[0] ?? 0,
@@ -137,6 +140,16 @@ export function extractCharacter(q: Query, loc: Localizer, id: number): Characte
   const female = q.at(`${base}/female`) === true;
   const cultureId = numberOrNull(q.at(`${base}/culture`));
   const faithId = numberOrNull(q.at(`${base}/faith`));
+
+  const family = `${base}/family_data`;
+  const spouseIds = numberList(q.at(`${family}/spouse`));
+  const primarySpouseId = numberOrNull(q.at(`${family}/primary_spouse`));
+  if (primarySpouseId !== null && !spouseIds.includes(primarySpouseId)) spouseIds.unshift(primarySpouseId);
+  const betrothedId = numberOrNull(q.at(`${family}/betrothed`));
+
+  const court = `${base}/court_data`;
+  const employerId = numberOrNull(q.at(`${court}/employer`));
+  const councilTaskId = numberOrNull(q.at(`${court}/council_task`));
 
   const alive = `${base}/alive_data`;
   const gold = numberOrNull(q.at(`${alive}/gold/value`));
@@ -162,7 +175,6 @@ export function extractCharacter(q: Query, loc: Localizer, id: number): Characte
     : null;
   const perks = stringList(q.at(`${alive}/perk`));
 
-  // Primary title from domain[0].
   const domain = (q.at(`${base}/landed_data/domain`) as number[] | undefined) ?? [];
   const primaryTitleId = domain[0];
   const primaryTitle =
@@ -183,6 +195,11 @@ export function extractCharacter(q: Query, loc: Localizer, id: number): Characte
     female,
     cultureId,
     faithId,
+    spouseIds,
+    betrothedId,
+    isMarried: spouseIds.length > 0,
+    employerId,
+    councilTaskId,
     skills,
     traits,
     gold,
@@ -254,10 +271,6 @@ export function extractImmediateFamily(q: Query, loc: Localizer, id: number): Im
   };
 }
 
-// CK3 stores custom names in an encoded form (e.g. "CrI_chA_n" for "Críchán"):
-// underscores separate combining segments and casing marks accents. Strip
-// underscores and lowercase so a plain query ("crichan") matches. This only
-// removes separators, so it never matches less than a bare lowercase compare.
 function normalizeName(s: string): string {
   return s.toLowerCase().replace(/_/g, "");
 }
@@ -265,7 +278,6 @@ function normalizeName(s: string): string {
 export function findCharacters(text: string, name: string): CharacterMatch[] {
   const start = text.indexOf("\nliving={");
   if (start === -1) return [];
-  // end = next top-level key after living's opening
   const endRe = /\n[a-z_][a-z0-9_]*=\{/g;
   endRe.lastIndex = start + "\nliving={".length;
   const endM = endRe.exec(text);
@@ -276,8 +288,6 @@ export function findCharacters(text: string, name: string): CharacterMatch[] {
   const out: CharacterMatch[] = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null && m.index < end) {
-    // Both capture groups are non-optional in the regex, so a successful
-    // exec guarantees m[1] and m[2] are defined.
     if (normalizeName(m[2]!).includes(needle))
       out.push({ id: Number(m[1]!), name: m[2]!, primaryTitle: null });
   }
