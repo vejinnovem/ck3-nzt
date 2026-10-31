@@ -33,8 +33,10 @@ export interface Snapshot {
   date: string;
   parsedAt: number;
   overview: RealmOverview;
-  ruler: CharacterInfo | null;
-  family: ImmediateFamilyInfo;
+  // Optional in the TypeScript interface so older stored/test snapshots remain readable.
+  // buildSnapshot always emits both fields for new snapshots.
+  ruler?: CharacterInfo | null;
+  family?: ImmediateFamilyInfo;
   military: MilitaryInfo;
   succession: SuccessionInfo;
   diplomacy: DiplomacyInfo;
