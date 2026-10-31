@@ -10,6 +10,8 @@ export interface CharacterFocus {
   progress: number | null;
 }
 
+export type CharacterFocusKind = "lifestyle" | "education" | "other";
+
 export interface CharacterInfo {
   id: number;
   name: string;
@@ -23,6 +25,7 @@ export interface CharacterInfo {
   isMarried: boolean;
   employerId: number | null;
   councilTaskId: number | null;
+  /** Base skill values stored directly in the save. UI values can be higher after modifiers. */
   skills: {
     diplomacy: number;
     martial: number;
@@ -42,6 +45,8 @@ export interface CharacterInfo {
   fertility: number | null;
   stress: number | null;
   focus: CharacterFocus | null;
+  focusKind: CharacterFocusKind | null;
+  lifestyleXp: Record<string, number>;
   perks: string[];
   primaryTitle: string | null;
   claims: { title: string; pressed: boolean }[];
@@ -84,6 +89,22 @@ function stringList(v: unknown): string[] {
   if (typeof v === "string") return [v];
   if (!Array.isArray(v)) return [];
   return v.map(String);
+}
+
+function numberRecord(v: unknown): Record<string, number> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof value === "number") out[key] = value;
+  }
+  return out;
+}
+
+function focusKind(type: string | null): CharacterFocusKind | null {
+  if (!type) return null;
+  if (type.startsWith("education_")) return "education";
+  if (type.endsWith("_focus")) return "lifestyle";
+  return "other";
 }
 
 function dateParts(v: unknown): { year: number; month: number; day: number } | null {
@@ -173,6 +194,8 @@ export function extractCharacter(q: Query, loc: Localizer, id: number): Characte
         progress: numberOrNull(rawFocus.progress),
       }
     : null;
+  const focusType = focus?.type ?? null;
+  const lifestyleXp = numberRecord(q.at(`${alive}/lifestyle_xp`));
   const perks = stringList(q.at(`${alive}/perk`));
 
   const domain = (q.at(`${base}/landed_data/domain`) as number[] | undefined) ?? [];
@@ -212,6 +235,8 @@ export function extractCharacter(q: Query, loc: Localizer, id: number): Characte
     fertility,
     stress,
     focus,
+    focusKind: focusKind(focusType),
+    lifestyleXp,
     perks,
     primaryTitle,
     claims,

@@ -28,6 +28,7 @@ living={
     fertility=0.62
     stress=0
     focus={ type="stewardship_domain_focus" date=866.1.1 changes=1 progress=42.5 }
+    lifestyle_xp={ stewardship_lifestyle=725 martial_lifestyle=100 }
     perk={ "tax_man_perk" "cutting_cornerstones_perk" }
   }
   landed_data={ succession={ 3 4 } }
@@ -53,7 +54,7 @@ living={
   birth=858.7.1
   skill={ 1 1 2 2 3 1 }
   family_data={ betrothed=6 }
-  alive_data={ health=5.0 }
+  alive_data={ health=5.0 focus={ type="education_diplomacy" date=867.1.1 changes=0 progress=3 } }
 }
 5={ first_name="Mila" female=yes birth=856.1.1 skill={ 1 1 1 1 1 1 } }
 6={ first_name="Bogdan" birth=855.1.1 skill={ 1 1 1 1 1 1 } }
@@ -84,9 +85,18 @@ test("extractCharacter exposes ruler advisory fields", async () => {
   expect(c!.pietyCurrency).toBe(50);
   expect(c!.fertility).toBe(0.62);
   expect(c!.focus?.type).toBe("stewardship_domain_focus");
+  expect(c!.focusKind).toBe("lifestyle");
+  expect(c!.lifestyleXp).toEqual({ stewardship_lifestyle: 725, martial_lifestyle: 100 });
   expect(c!.perks).toEqual(["tax_man_perk", "cutting_cornerstones_perk"]);
   expect(c!.isMarried).toBe(true);
   expect(c!.spouseIds).toEqual([2]);
+});
+
+test("extractCharacter distinguishes education focus from lifestyle focus", async () => {
+  const loc = new Localizer(null);
+  const daughter = await queryGamestate(FAMILY_GS, (q) => extractCharacter(q, loc, 4));
+  expect(daughter?.focus?.type).toBe("education_diplomacy");
+  expect(daughter?.focusKind).toBe("education");
 });
 
 test("extractCharacter exposes marriage and court status for heirs", async () => {

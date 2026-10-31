@@ -45,6 +45,12 @@ living={
   skill={ 30 30 30 30 30 30 }
   court_data={ employer=99 }
  }
+ 16={
+  first_name="Guest"
+  birth=840.1.1
+  skill={ 6 6 6 6 6 6 }
+  court_data={ host=10 }
+ }
 }
 `);
 
@@ -58,15 +64,36 @@ test("extractCouncil resolves landed council task IDs to councillor characters",
     type: "task_manage_domain",
     ownerId: 11,
     courtOwnerId: 10,
+    office: "steward",
   });
   expect(council.members[1]?.activeTask?.type).toBe("task_train_commanders");
-  expect(council.courtSize).toBe(4);
+  expect(council.members[1]?.activeTask?.office).toBe("marshal");
+  expect(council.courtSize).toBe(5);
+  expect(council.courtierCount).toBe(4);
+  expect(council.guestCount).toBe(1);
+  expect(council.offices).toEqual([
+    { office: "chancellor", vacant: true, memberId: null, taskId: null, taskType: null },
+    { office: "steward", vacant: false, memberId: 11, taskId: 100, taskType: "task_manage_domain" },
+    { office: "marshal", vacant: false, memberId: 12, taskId: 101, taskType: "task_train_commanders" },
+    { office: "spymaster", vacant: true, memberId: null, taskId: null, taskType: null },
+    { office: "court_chaplain", vacant: true, memberId: null, taskId: null, taskType: null },
+  ]);
   expect(council.candidates.map((candidate) => candidate.name)).toEqual([
     "Diplomat",
     "Steward",
     "Marshal",
+    "Guest",
   ]);
   expect(council.candidates.find((candidate) => candidate.name === "Steward")?.isCouncillor).toBe(
     true,
+  );
+  expect(council.candidates.find((candidate) => candidate.name === "Steward")?.courtStatus).toBe(
+    "courtier",
+  );
+  expect(council.candidates.find((candidate) => candidate.name === "Guest")?.courtStatus).toBe(
+    "guest",
+  );
+  expect(council.candidates.find((candidate) => candidate.name === "Guest")?.councilEligibility).toBe(
+    "unknown",
   );
 });
