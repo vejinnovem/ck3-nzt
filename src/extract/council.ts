@@ -31,6 +31,9 @@ export interface CourtCandidateInfo {
 }
 
 export interface CouncilInfo {
+  /** Raw IDs stored in landed_data/council when they resolve as council tasks. */
+  taskIds: number[];
+  /** Character IDs of the resolved councillors. */
   memberIds: number[];
   members: CouncillorInfo[];
   courtSize: number;
@@ -63,10 +66,16 @@ function councilTask(q: Query, taskId: number | null): CouncilTaskInfo | null {
   };
 }
 
-function toCouncillor(q: Query, loc: Localizer, id: number): CouncillorInfo | null {
+function toCouncillor(
+  q: Query,
+  loc: Localizer,
+  id: number,
+  knownTask: CouncilTaskInfo | null = null,
+): CouncillorInfo | null {
   const character = extractCharacter(q, loc, id);
   if (!character) return null;
-  const councilTaskId = numberOrNull(q.at(`/living/${id}/court_data/council_task`));
+  const storedTaskId = numberOrNull(q.at(`/living/${id}/court_data/council_task`));
+  const councilTaskId = knownTask?.id ?? storedTaskId;
   return {
     id,
     name: character.name,
@@ -75,7 +84,7 @@ function toCouncillor(q: Query, loc: Localizer, id: number): CouncillorInfo | nu
     traits: character.traits,
     primaryTitle: character.primaryTitle,
     councilTaskId,
-    activeTask: councilTask(q, councilTaskId),
+    activeTask: knownTask ?? councilTask(q, storedTaskId),
   };
 }
 
@@ -86,12 +95,39 @@ function candidateScore(character: CharacterInfo): number {
 
 export function extractCouncil(q: Query, loc: Localizer, candidateLimit = 30): CouncilInfo {
   const playerId = numberOrNull(q.at("/played_character/character"));
-  if (playerId === null) return { memberIds: [], members: [], courtSize: 0, candidates: [] };
+  if (playerId === null)
+    return { taskIds: [], memberIds: [], members: [], courtSize: 0, candidates: [] };
 
-  const memberIds = numberList(q.at(`/living/${playerId}/landed_data/council`));
-  const members = memberIds
-    .map((id) => toCouncillor(q, loc, id))
-    .filter((member): member is CouncillorInfo => member !== null);
+  // In current CK3 saves landed_data/council contains council-task IDs, not
+  // character IDs. Older fixtures/saves can expose character IDs directly, so
+  // retain a fallback for that representation.
+  const rawCouncilIds = numberList(q.at(`/living/${playerId}/landed_data/council`));
+  const taskIds: number[] = [];
+  const members: CouncillorInfo[] = [];
+  const seenMembers = new Set<number>();
+
+  for (const rawId of rawCouncilIds) {
+    const task = councilTask(q, rawId);
+    if (task?.ownerId !== null && task?.ownerId !== undefined) {
+      taskIds.push(rawId);
+      const member = toCouncillor(q, loc, task.ownerId, task);
+      if (member && !seenMembers.has(member.id)) {
+        seenMembers.add(member.id);
+        members.push(member);
+      }
+      continue;
+    }
+
+    // Compatibility fallback: raw value itself is a character ID.
+    const member = toCouncillor(q, loc, rawId);
+    if (member && !seenMembers.has(member.id)) {
+      seenMembers.add(member.id);
+      members.push(member);
+      if (member.councilTaskId !== null) taskIds.push(member.councilTaskId);
+    }
+  }
+
+  const memberIds = members.map((member) => member.id);
   const councillorSet = new Set(memberIds);
 
   const living = q.at("/living") as Record<string, Record<string, unknown>> | undefined;
@@ -125,6 +161,7 @@ export function extractCouncil(q: Query, loc: Localizer, candidateLimit = 30): C
     }));
 
   return {
+    taskIds,
     memberIds,
     members,
     courtSize: courtIds.length,
