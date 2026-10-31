@@ -63,6 +63,44 @@ function str(v: unknown): string {
   return typeof v === "string" ? v : String(v ?? "");
 }
 
+/**
+ * CK3 can represent an independent ruler with several top-level county titles.
+ * The save-only extractor initially sees those as separate de-facto roots, but
+ * strategically they are one realm because they share the same independent ruler.
+ */
+export function groupStrategicTargetsByRuler(expansion: ExpansionInfo): ExpansionInfo {
+  const grouped = new Map<number, ExpansionInfo["strategicTargets"][number]>();
+
+  for (const target of expansion.strategicTargets) {
+    const existing = grouped.get(target.rulerId);
+    if (!existing) {
+      grouped.set(target.rulerId, {
+        ...target,
+        relevantTitles: [...target.relevantTitles],
+      });
+      continue;
+    }
+
+    const knownTitleIds = new Set(existing.relevantTitles.map((title) => title.id));
+    for (const title of target.relevantTitles) {
+      if (!knownTitleIds.has(title.id)) {
+        existing.relevantTitles.push(title);
+        knownTitleIds.add(title.id);
+      }
+    }
+  }
+
+  const strategicTargets = [...grouped.values()].sort((a, b) => {
+    if (a.currentStrength === null && b.currentStrength === null)
+      return a.realmName.localeCompare(b.realmName);
+    if (a.currentStrength === null) return 1;
+    if (b.currentStrength === null) return -1;
+    return a.currentStrength - b.currentStrength;
+  });
+
+  return { ...expansion, strategicTargets };
+}
+
 export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<Snapshot> {
   return queryGamestate(gamestate, (q: Query): Snapshot => {
     loc.setTraitLookup((q.at("/traits_lookup") as string[]) ?? null);
@@ -88,7 +126,7 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
     const council = extractCouncil(q, loc);
     const courtPositions = extractCourtPositions(q, loc);
     const military = extractMilitary(q, loc);
-    const expansion = extractExpansion(q, loc, military.wars);
+    const expansion = groupStrategicTargetsByRuler(extractExpansion(q, loc, military.wars));
     const succession = extractSuccession(q, loc);
     const diplomacy = extractDiplomacy(q, loc);
     const { factions, memberIds } = extractFactions(q, loc);
