@@ -100,6 +100,7 @@ test("persistent memory stores SQLite history and compact AI exports", async () 
     outputDir,
   });
   expect(firstResult.written).toBe(true);
+  expect(firstResult.refreshed).toBe(false);
   expect(firstResult.changeCount).toBe(0);
   await expect(stat(firstResult.databasePath)).resolves.toBeDefined();
 
@@ -132,4 +133,39 @@ test("persistent memory stores SQLite history and compact AI exports", async () 
     outputDir,
   });
   expect(duplicate.written).toBe(false);
+  expect(duplicate.refreshed).toBe(true);
+});
+
+test("already stored save refreshes exports after output directory changes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ck3-nzt-output-move-"));
+  temporaryDirectories.push(root);
+  const dataDir = join(root, "data");
+  const firstOutputDir = join(root, "local-export");
+  const secondOutputDir = join(root, "drive-export");
+  const snapshot = makeSnapshot("1066.9.15", 100, 2000);
+
+  const first = await persistSnapshot(snapshot, {
+    sourceFingerprint: "same-save",
+    dataDir,
+    outputDir: firstOutputDir,
+  });
+  expect(first.written).toBe(true);
+
+  const refreshed = await persistSnapshot(snapshot, {
+    sourceFingerprint: "same-save",
+    dataDir,
+    outputDir: secondOutputDir,
+  });
+  expect(refreshed.written).toBe(false);
+  expect(refreshed.refreshed).toBe(true);
+
+  const current = JSON.parse(await readFile(join(secondOutputDir, "current.json"), "utf8"));
+  const changes = JSON.parse(await readFile(join(secondOutputDir, "changes.json"), "utf8"));
+  const trends = JSON.parse(await readFile(join(secondOutputDir, "trends.json"), "utf8"));
+  const manifest = JSON.parse(await readFile(join(secondOutputDir, "manifest.json"), "utf8"));
+
+  expect(current.date).toBe("1066.9.15");
+  expect(changes.changes).toEqual([]);
+  expect(trends.window.snapshots).toBe(1);
+  expect(manifest.snapshotId).toBe(1);
 });
