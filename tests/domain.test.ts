@@ -16,8 +16,8 @@ landed_titles={
 }
 county_manager={
  counties={
-  c_alpha={ development=8 culture=12 faith=34 }
-  c_beta={ development=5 culture=12 faith=35 }
+  c_alpha={ development=8 county_control=92 culture=12 faith=34 }
+  c_beta={ development=5 control=75 culture=12 faith=35 }
  }
 }
 living={
@@ -52,6 +52,7 @@ test("extractRealmEconomy returns limits, cash flow and county details", async (
       key: "c_alpha",
       name: "Alpha",
       development: 8,
+      control: 92,
       cultureId: 12,
       faithId: 34,
       capitalTitleId: 3,
@@ -63,6 +64,7 @@ test("extractRealmEconomy returns limits, cash flow and county details", async (
       key: "c_beta",
       name: "Beta",
       development: 5,
+      control: 75,
       cultureId: 12,
       faithId: 35,
       capitalTitleId: 5,
