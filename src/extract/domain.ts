@@ -44,7 +44,9 @@ function titleKey(q: Query, titleId: number): string {
 
 function capitalBaronyForCounty(q: Query, countyId: number, domain: number[]): number | null {
   const explicit = numberOrNull(q.at(`/landed_titles/landed_titles/${countyId}/capital`));
-  if (explicit !== null) return explicit;
+  // Some current saves expose the county itself in `capital`, so only accept
+  // an explicit value when it actually points to a lower-tier title.
+  if (explicit !== null && explicit !== countyId) return explicit;
 
   for (const titleId of domain) {
     const key = titleKey(q, titleId);
