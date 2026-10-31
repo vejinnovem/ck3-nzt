@@ -2,3 +2,32 @@ node_modules/
 dist/
 *.ck3
 /tmp/
+
+# Local CK3-NZT state and exports
+/data/
+/export/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+current.json
+changes.json
+trends.json
+manifest.json
+
+# Local configuration / credentials
+.env
+.env.*
+!.env.example
+config.local.*
+credentials.json
+token.json
+client_secret*.json
+.npmrc
+*.pem
+*.key
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

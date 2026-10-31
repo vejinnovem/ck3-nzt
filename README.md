@@ -1,142 +1,173 @@
-# CK3 Strategy Advisor (MCP server)
+# CK3-NZT
 
-[![CI](https://github.com/thomandretti/ck3-strategy-advisor/actions/workflows/ci.yml/badge.svg)](https://github.com/thomandretti/ck3-strategy-advisor/actions/workflows/ci.yml)
+Persistent strategic memory and AI advisory bridge for **Crusader Kings III**.
 
-A local [Model Context Protocol](https://modelcontextprotocol.io) server that
-reads your **Crusader Kings III** save file and exposes your strategic situation
-to Claude as compact, curated tools. Ask Claude "what's my situation?" and it can
-pull your realm overview, military, succession, diplomacy, vassals, factions, and
-expansion options straight from your latest save.
+CK3-NZT is an experimental, read-only companion that turns CK3 saves into compact strategic state, keeps a long-term history of the campaign, and prepares model-friendly context for an AI adviser. The player still makes every decision and performs every action in the game.
 
-It is read-only: it never modifies your save or your game.
+> **Alpha:** the project is usable for local testing, but the storage schema and workflows may still change.
 
-## Requirements
+## What it does
 
-- **Node.js ≥ 22**
-- **Non-Ironman saves only.** Ironman saves are stored in a binary format; the
-  advisor detects them and returns a friendly message instead of mis-parsing.
-  Play (or re-save) without Ironman to use the advisor.
-- Mid/late-game saves are large (the embedded game state is ~200+ MB of text);
-  parsing one peaks at roughly **1.1 GB of memory** and takes a couple of seconds.
+CK3-NZT currently:
 
-## Install & build
+- reads the newest parseable CK3 save;
+- extracts realm, military, succession, diplomacy, vassals, factions, titles and expansion data;
+- keeps persistent campaign history in a local SQLite database;
+- computes strategic changes between snapshots;
+- computes lightweight trends from recent snapshots;
+- exports compact JSON files that can be synced or supplied to an AI model;
+- retains the original read-only MCP tools from CK3 Strategy Advisor.
 
-```bash
-npm install
-npm run build
+The intended architecture is:
+
+```text
+CK3 save
+   |
+   v
+CK3-NZT parser / extractors
+   |
+   +--> local SQLite memory
+   |      snapshots + strategic changes
+   |
+   +--> compact AI export
+          current.json
+          changes.json
+          trends.json
+          manifest.json
+               |
+               +--> local AI / MCP
+               +--> synced folder (for example Google Drive)
 ```
+
+SQLite is the durable source of historical data. The AI does not need to ingest the whole campaign history on every question; CK3-NZT can precompute the small state/change/trend views that matter for the next decision.
+
+## Windows quick start
+
+CK3-NZT includes an idempotent PowerShell installer/updater. It installs Git and a current Node.js LTS release through WinGet when necessary, clones the repository, installs npm dependencies and runs the verification suite locally.
+
+Download and run it from PowerShell:
+
+```powershell
+iwr https://raw.githubusercontent.com/vejinnovem/ck3-nzt/main/setup.ps1 -OutFile "$env:TEMP\ck3-nzt-setup.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\ck3-nzt-setup.ps1"
+```
+
+Default application location:
+
+```text
+%LOCALAPPDATA%\CK3-NZT\app
+```
+
+After installation, capture the newest CK3 state with:
+
+```powershell
+cd "$env:LOCALAPPDATA\CK3-NZT\app"
+npm run export
+```
+
+Future updates can be applied by double-clicking `update.cmd` in the application directory or by running `setup.ps1` again.
+
+## Local verification
+
+GitHub-hosted CI is intentionally not used. Installation and every normal update run `verify.ps1` locally.
+
+The checks are executed independently:
+
+```text
+lint
+build
+tests
+```
+
+A failure in one check does not prevent the remaining checks from running. A combined PASS/FAIL summary is printed at the end and the installer/updater exits with an error if any check failed.
+
+You can also run the verification manually:
+
+```powershell
+.\verify.ps1
+```
+
+Formatting remains available as a separate developer check:
+
+```powershell
+npm run format:check
+```
+
+## Local data and privacy
+
+No OpenAI, Google, GitHub or other API token is required for the core parser, memory database or exporter.
+
+By default, runtime data is kept outside the Git repository:
+
+```text
+%LOCALAPPDATA%\CK3-NZT\data\memory.sqlite
+%LOCALAPPDATA%\CK3-NZT\export\current.json
+%LOCALAPPDATA%\CK3-NZT\export\changes.json
+%LOCALAPPDATA%\CK3-NZT\export\trends.json
+%LOCALAPPDATA%\CK3-NZT\export\manifest.json
+```
+
+The source fingerprint written to the export deliberately excludes the absolute CK3 save path and Windows username.
+
+If you use Google Drive for Desktop (or another folder-sync tool), point only the export directory at a synced folder. The SQLite database can remain local, so CK3-NZT does not need Google OAuth credentials at all.
+
+Example for the current PowerShell session:
+
+```powershell
+$env:CK3_NZT_OUTPUT_DIR = "X:\Some Synced Folder\CK3-NZT"
+npm run export
+```
+
+Do not commit local exports, databases, `.env` files or credentials. The repository `.gitignore` excludes common secret and runtime files.
 
 ## Configuration
 
-The server finds your save and game directories from environment variables, with
-WSL/`/mnt/c` discovery as a fallback:
+Environment variables:
 
-| Variable       | Purpose                             | Default                                                                                         |
-| -------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `CK3_SAVE_DIR` | Folder containing your `.ck3` saves | auto-discovered at `/mnt/c/Users/*/Documents/Paradox Interactive/Crusader Kings III/save games` |
-| `CK3_GAME_DIR` | CK3 game install (for localization) | `/mnt/c/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game`                     |
+| Variable | Purpose |
+| --- | --- |
+| `CK3_SAVE_DIR` | Override the CK3 save directory. |
+| `CK3_GAME_DIR` | Override the CK3 `game` directory used for localization. |
+| `CK3_NZT_DATA_DIR` | Override the private local SQLite data directory. |
+| `CK3_NZT_OUTPUT_DIR` | Override the compact export directory; this can be a synced folder. |
 
-`CK3_GAME_DIR` is optional. Without it, titles/traits are shown as their raw game
-keys instead of localized names — everything else still works.
+On Windows CK3-NZT first checks the current user's Documents/OneDrive Documents locations. The original WSL `/mnt/c/...` discovery remains as a fallback.
 
-The server reads the **newest readable** `.ck3` in the save directory. CK3
-autosaves are written in a binary token format (the same one Ironman uses)
-regardless of whether you play Ironman, and the advisor can't decode it — so it
-automatically **skips binary autosaves/Ironman saves and uses your newest normal
-save** instead. You don't need to delete or rename autosaves; just keep making
-ordinary saves and the freshest one is picked up.
+## Build from source
 
-## Register with Claude
+Requirements:
 
-Add it as a local stdio MCP server. In **Claude Code**:
+- Node.js **22.13+**
+- Git
 
 ```bash
-claude mcp add ck3-advisor -- node /absolute/path/to/ck3mod/dist/index.js
+npm ci
+npm run build
+npm test
 ```
 
-Or in **Claude Desktop**, add to `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "ck3-advisor": {
-      "command": "node",
-      "args": ["/absolute/path/to/ck3mod/dist/index.js"],
-      "env": {
-        "CK3_SAVE_DIR": "/mnt/c/Users/you/Documents/Paradox Interactive/Crusader Kings III/save games"
-      }
-    }
-  }
-}
-```
-
-## Workflow
-
-1. Play CK3 (non-Ironman). **Save your game** whenever you want fresh advice.
-2. Ask Claude about your realm. Each tool response is stamped with the save's
-   in-game date and how long ago it was read, so you know how current it is.
-3. Saved again? Just ask again — the server re-reads the newest save automatically.
-
-## Tools
-
-| Tool             | What it returns                                                                       |
-| ---------------- | ------------------------------------------------------------------------------------- |
-| `realm_overview` | Ruler, primary title & tier, house, gold/prestige/piety, date. Start here.            |
-| `military`       | Levy + total mobilised strength, and ongoing wars (side, casus belli, target, score). |
-| `succession`     | Heirs in order, succession & gender laws, rival claimants.                            |
-| `diplomacy`      | Alliances, truces, independence, and who most dislikes you.                           |
-| `vassals`        | Your most powerful vassals: power owed, opinion, council seat, faction danger flag.   |
-| `titles`         | Titles you personally hold, grouped by tier, each with its de jure liege.             |
-| `factions`       | Factions targeting you: type, strength vs. their threshold, members, leader.          |
-| `expansion`      | Stored claims (pressed/unpressed), unheld de jure titles, ongoing-war targets.        |
-| `find_character` | Search living characters by (partial) name → ids.                                     |
-| `character`      | Full dossier for one character id: traits, skills, wealth, claims.                    |
-| `foreign_realm`  | Look up any realm by name/key — ruler, army, allies, liege, active wars.              |
-
-## Known limitations (v1)
-
-These reflect what is and isn't stored in the save:
-
-- **Names** are stored in CK3's encoded form; `find_character` normalizes and does
-  best-effort substring matching, so very stylized names may not match.
-- **Claims** are reported as pressed/unpressed — CK3 does not store a strong/weak
-  distinction in the save.
-- **Men-at-arms** are not broken out per ruler in the save; `military` reports the
-  realm's mobilisation totals.
-- **Opinion** values (e.g. in `diplomacy`/`vassals`) are approximate, summed from
-  stored opinion modifiers rather than the game's computed total.
-- **Localization** is English-only, ignores `$KEY$` interpolation, and is
-  currently **unverified against a real CK3 install** (developed against a test
-  fixture). Real `.yml` quirks — a leading BOM, `§` colour codes and `#`
-  comments inside values, deeply nested subfolders — may not all be handled.
-  Without `CK3_GAME_DIR`, titles and traits appear as their raw game keys.
-- `expansion` lists **stored** levers (claims, unheld de jure titles, active-war
-  CBs), not a full computed enumeration of every possible casus belli.
-
-## Development
+Useful commands:
 
 ```bash
-npm test        # run the vitest suite
-npm run test:watch
-npm run lint    # eslint (typescript-eslint, flat config)
-npm run format  # prettier --write (check-only: npm run format:check)
-npm run dev     # run the server from source via tsx
+npm run export       # parse newest save and update persistent memory/export
+npm run dev:export   # same from TypeScript source
+npm run dev          # run the inherited MCP server from source
+npm run lint
+npm run format:check
 ```
 
-The verified gamestate field paths the extractors rely on are documented in
-[`docs/save-schema.md`](docs/save-schema.md), and `scripts/inspect-section.mjs`
-/ `scripts/check-paths.mjs` help map new fields against a real save.
+## Save format limitation
 
-## Distribution (future)
+The current parser supports normal text-format CK3 saves. CK3 autosaves and Ironman saves use the binary token format and are currently skipped/not decoded. Keep a normal manual save when you want a fresh strategic snapshot.
 
-The documented path for shipping this to non-developers is [MCPB](https://github.com/anthropics/mcpb)
-(a self-contained bundle with the Node runtime), so it can be installed without a
-local Node/npm setup. The current release targets the local stdio prototype above.
+## Upstream project and license
 
-## License
+CK3-NZT is built on **CK3 Strategy Advisor** by Thom Andretti:
 
-[MIT](LICENSE) © Thom Andretti
+https://github.com/thomandretti/ck3-strategy-advisor
 
-This is an unofficial, fan-made tool. _Crusader Kings III_ is a trademark of
-Paradox Interactive AB. This project is not affiliated with or endorsed by
-Paradox Interactive.
+The original repository history was preserved when CK3-NZT was created. Its save parsing, schema research, extractors and MCP tools form the initial technical foundation of this project.
+
+The upstream project is MIT licensed. See [LICENSE](LICENSE). The original copyright and license notice are preserved.
+
+This is an unofficial fan-made project. Crusader Kings III is a trademark of Paradox Interactive AB. CK3-NZT is not affiliated with or endorsed by Paradox Interactive.
