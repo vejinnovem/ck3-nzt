@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, test } from "vitest";
 import { resolveConfig } from "../src/config.js";
 
@@ -8,4 +11,24 @@ test("env vars take precedence", () => {
 
 test("missing env yields nulls", () => {
   expect(resolveConfig({})).toEqual({ saveDir: null, gameDir: null });
+});
+
+test("loads persistent local config and keeps env overrides", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ck3-nzt-config-"));
+  const path = join(dir, "config.json");
+  try {
+    writeFileSync(path, '\uFEFF{"saveDir":"D:/CK3/saves","gameDir":"E:/CK3/game"}', "utf8");
+
+    expect(resolveConfig({ CK3_NZT_CONFIG_FILE: path })).toEqual({
+      saveDir: "D:/CK3/saves",
+      gameDir: "E:/CK3/game",
+    });
+
+    expect(resolveConfig({ CK3_NZT_CONFIG_FILE: path, CK3_SAVE_DIR: "F:/override" })).toEqual({
+      saveDir: "F:/override",
+      gameDir: "E:/CK3/game",
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
