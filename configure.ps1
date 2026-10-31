@@ -125,6 +125,28 @@ function Resolve-OutputDir([string]$Entered, [string]$Fallback) {
 function Get-GoogleDriveRoots {
     $roots = @()
 
+    # Drive for desktop supports a configurable mount point. Prefer Google's
+    # documented DriveFS settings before falling back to volume discovery.
+    foreach ($registryPath in @(
+        'HKCU:\Software\Google\DriveFS',
+        'HKLM:\Software\Google\DriveFS',
+        'HKLM:\Software\Policies\Google\DriveFS'
+    )) {
+        try {
+            $settings = Get-ItemProperty $registryPath -ErrorAction Stop
+            $mountPoint = Expand-Path ([string]$settings.DefaultMountPoint)
+            if ($mountPoint) {
+                $mountPoint = $mountPoint.Trim('"')
+                if ($mountPoint -match '^[A-Za-z]:$') { $mountPoint += '\' }
+                if (Test-Path $mountPoint) {
+                    $roots += (Resolve-Path $mountPoint).Path
+                }
+            }
+        } catch {
+            # This scope may not define DefaultMountPoint; continue with fallbacks.
+        }
+    }
+
     try {
         foreach ($disk in Get-CimInstance Win32_LogicalDisk -ErrorAction Stop) {
             if (-not $disk.DeviceID) { continue }
