@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
@@ -27,6 +27,23 @@ test("loads persistent local config and keeps env overrides", () => {
     expect(resolveConfig({ CK3_NZT_CONFIG_FILE: path, CK3_SAVE_DIR: "F:/override" })).toEqual({
       saveDir: "F:/override",
       gameDir: "E:/CK3/game",
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("accepts CK3 install root and normalizes it to the game directory", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ck3-nzt-game-root-"));
+  const gameDir = join(dir, "game");
+  const configPath = join(dir, "config.json");
+  try {
+    mkdirSync(join(gameDir, "localization"), { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ saveDir: "D:/saves", gameDir: dir }), "utf8");
+
+    expect(resolveConfig({ CK3_NZT_CONFIG_FILE: configPath })).toEqual({
+      saveDir: "D:/saves",
+      gameDir,
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
