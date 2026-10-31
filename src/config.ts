@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -15,6 +15,19 @@ function configFilePath(env: NodeJS.ProcessEnv): string | null {
   return null;
 }
 
+function normalizeGameDir(path: string | null | undefined): string | null {
+  if (!path) return null;
+
+  // Accept either the CK3 install root (.../Crusader Kings III)
+  // or the actual data directory (.../Crusader Kings III/game).
+  if (existsSync(join(path, "localization"))) return path;
+
+  const nestedGame = join(path, "game");
+  if (existsSync(join(nestedGame, "localization"))) return nestedGame;
+
+  return path;
+}
+
 function loadLocalConfig(env: NodeJS.ProcessEnv): Partial<AdvisorConfig> {
   const path = configFilePath(env);
   if (!path) return {};
@@ -25,7 +38,10 @@ function loadLocalConfig(env: NodeJS.ProcessEnv): Partial<AdvisorConfig> {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     return {
       saveDir: typeof parsed.saveDir === "string" && parsed.saveDir ? parsed.saveDir : null,
-      gameDir: typeof parsed.gameDir === "string" && parsed.gameDir ? parsed.gameDir : null,
+      gameDir:
+        typeof parsed.gameDir === "string" && parsed.gameDir
+          ? normalizeGameDir(parsed.gameDir)
+          : null,
     };
   } catch {
     return {};
@@ -36,7 +52,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv = process.env): AdvisorConf
   const local = loadLocalConfig(env);
   return {
     saveDir: env.CK3_SAVE_DIR ?? local.saveDir ?? null,
-    gameDir: env.CK3_GAME_DIR ?? local.gameDir ?? null,
+    gameDir: normalizeGameDir(env.CK3_GAME_DIR ?? local.gameDir ?? null),
   };
 }
 
