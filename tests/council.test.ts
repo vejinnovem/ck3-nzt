@@ -133,3 +133,37 @@ living={
     },
   });
 });
+
+test("extractCouncil recovers a county target by reversing county council_tasks", async () => {
+  const gamestate = Buffer.from(`
+date=877.3.10
+played_character={ character=10 }
+landed_titles={ landed_titles={
+ 200={ key="c_opole" name="Opole" holder=20 }
+}}
+county_manager={ counties={
+ c_opole={ county_control=5.9 culture=1 council_tasks={ 500 } }
+}}
+council_task_manager={ active={
+ 500={ type="task_increase_control" owner=12 court_owner=10 target={ opaque_scope=999 } }
+}}
+living={
+ 10={ first_name="Siemowit" culture=1 landed_data={ council={ 500 } } }
+ 12={ first_name="Rodislav" skill={ 1 14 1 1 1 10 } court_data={ employer=10 council_task=500 } }
+ 20={ first_name="Niemir" }
+}
+`);
+
+  const council = await queryGamestate(gamestate, (q) => extractCouncil(q, new Localizer(null)));
+  expect(council.members[0]?.activeTask).toMatchObject({
+    type: "task_increase_control",
+    targetTitleId: 200,
+    targetTitle: "Opole",
+    targetCounty: {
+      titleId: 200,
+      name: "Opole",
+      control: 5.9,
+    },
+  });
+  expect(council.members[0]?.activeTask?.diagnostics).toBeUndefined();
+});

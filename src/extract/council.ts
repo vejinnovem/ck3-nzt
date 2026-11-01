@@ -133,6 +133,41 @@ function primitiveFields(record: Obj, limit = 32): Record<string, Primitive> {
   return result;
 }
 
+function containsNumberReference(value: unknown, target: number, depth = 0): boolean {
+  if (depth > 8 || value === null || value === undefined) return false;
+  if (typeof value === "number") return value === target;
+  if (Array.isArray(value)) {
+    return value.some((item) => containsNumberReference(item, target, depth + 1));
+  }
+  if (typeof value !== "object") return false;
+  return Object.values(value as Obj).some((child) =>
+    containsNumberReference(child, target, depth + 1),
+  );
+}
+
+function countyTitleIdForCouncilTask(q: Query, taskId: number): number | null {
+  const counties = obj(q.at("/county_manager/counties"));
+  const titles = obj(q.at("/landed_titles/landed_titles"));
+  if (!counties || !titles) return null;
+
+  let countyKey: string | null = null;
+  for (const [key, rawCounty] of Object.entries(counties)) {
+    const county = obj(rawCounty);
+    if (!county || !containsNumberReference(county["council_tasks"], taskId)) continue;
+    countyKey = key;
+    break;
+  }
+  if (countyKey === null) return null;
+
+  for (const [idText, rawTitle] of Object.entries(titles)) {
+    const id = Number(idText);
+    const title = obj(rawTitle);
+    if (!Number.isFinite(id) || !title || title["key"] !== countyKey) continue;
+    if (titleTierFromKey(countyKey) === "county") return id;
+  }
+  return null;
+}
+
 function officeForTask(type: string | null): CouncilOffice | null {
   if (!type) return null;
   if (["task_foreign_affairs", "task_domestic_affairs", "task_integrate_title"].includes(type)) {
@@ -186,7 +221,10 @@ function councilTask(q: Query, loc: Localizer, taskId: number | null): CouncilTa
 
   if (!record && type === undefined && ownerId === null && courtOwnerId === null) return null;
   const taskType = typeof type === "string" ? type : null;
-  const targetId = record ? targetTitleId(q, record) : null;
+  let targetId = record ? targetTitleId(q, record) : null;
+  if (targetId === null && taskType !== null && TARGETED_TASKS.has(taskType)) {
+    targetId = countyTitleIdForCouncilTask(q, taskId);
+  }
   const targetKey =
     targetId === null ? null : q.at(`/landed_titles/landed_titles/${targetId}/key`);
   const targetCounty =
