@@ -1,7 +1,10 @@
 import { expect, test } from "vitest";
+import { fileURLToPath } from "node:url";
 import { queryGamestate } from "../src/parser.js";
 import { extractRealmEconomy } from "../src/extract/domain.js";
 import { Localizer } from "../src/localization.js";
+
+const GAME_DIR = fileURLToPath(new URL("./fixtures/gamedir", import.meta.url));
 
 const GS = Buffer.from(`date=867.1.1
 played_character={ character=10 player=1 }
@@ -38,6 +41,22 @@ living={
   }
  }
 }
+`);
+
+const GS_STATIC = Buffer.from(`date=867.1.1
+played_character={ character=10 player=1 }
+landed_titles={
+ landed_titles={
+  1={ key="d_test" holder=10 }
+  2={ key="c_alpha" holder=10 de_jure_liege=1 capital=3 }
+  3={ key="b_alpha" holder=10 de_jure_liege=2 capital_barony=yes }
+ }
+}
+provinces={
+ 101={ holding={ type="tribal_holding" buildings={ { type="market_villages_01" } } } }
+}
+county_manager={ counties={ c_alpha={ development=8 county_control=92 culture=12 faith=34 } } }
+living={ 10={ alive_data={ gold={ value=64 } income=2.5 } landed_data={ domain={ 1 2 3 } realm_capital=3 } } }
 `);
 
 test("extractRealmEconomy returns limits, cash flow and county details", async () => {
@@ -129,4 +148,22 @@ test("extractRealmEconomy exposes realm rules and province-backed domain buildin
       dataSource: "province",
     },
   ]);
+});
+
+test("extractRealmEconomy falls back to static landed-title province mappings", async () => {
+  const economy = await queryGamestate(GS_STATIC, (q) =>
+    extractRealmEconomy(q, new Localizer(GAME_DIR)),
+  );
+
+  expect(economy.holdings).toHaveLength(1);
+  expect(economy.holdings[0]).toMatchObject({
+    titleId: 3,
+    key: "b_alpha",
+    provinceId: 101,
+    holdingType: "tribal_holding",
+    buildings: [{ type: "market_villages_01", name: "market_villages_01" }],
+    dataAvailable: true,
+    dataSource: "province",
+  });
+  expect(economy.holdings[0]?.diagnostics).toBeUndefined();
 });
