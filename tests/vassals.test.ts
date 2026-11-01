@@ -65,3 +65,44 @@ living={
     },
   ]);
 });
+
+test("detects a global active vassal contract even when player contract IDs are absent", async () => {
+  const gamestate = Buffer.from(`
+played_character={ character=10 }
+living={
+ 10={ first_name="Ruler" landed_data={ domain={ 1 } council={} } }
+ 20={ first_name="Child" landed_data={ strength_for_liege=77 } }
+}
+vassal_contracts={ active={
+ 900={ liege=10 vassal=20 }
+}}
+`);
+
+  const result = await queryGamestate(gamestate, (q) =>
+    extractVassals(q, new Localizer(null), new Set()),
+  );
+
+  expect(result.total).toBe(1);
+  expect(result.vassals[0]).toMatchObject({ id: 20, name: "Child", strengthForLiege: 77 });
+});
+
+test("accepts object-shaped holder and de-facto liege references", async () => {
+  const gamestate = Buffer.from(`
+played_character={ character=10 }
+landed_titles={ landed_titles={
+ 1={ key="d_test" holder={ character=10 } }
+ 2={ key="c_granted" holder={ character=20 } de_facto_liege={ title=1 } }
+}}
+living={
+ 10={ first_name="Ruler" landed_data={ domain={ 1 } council={} } }
+ 20={ first_name="Child" landed_data={ strength_for_liege=55 } }
+}
+`);
+
+  const result = await queryGamestate(gamestate, (q) =>
+    extractVassals(q, new Localizer(null), new Set()),
+  );
+
+  expect(result.total).toBe(1);
+  expect(result.vassals[0]).toMatchObject({ id: 20, name: "Child", strengthForLiege: 55 });
+});
