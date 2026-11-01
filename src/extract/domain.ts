@@ -168,18 +168,21 @@ function provinceRecord(q: Query, provinceId: number): Obj | null {
 
 function provinceIdForBarony(q: Query, titleId: number): number | null {
   const title = obj(q.at(`/landed_titles/landed_titles/${titleId}`));
+
+  // Only fields whose semantics explicitly identify a province are safe direct candidates.
+  // A title ID is NOT a province ID, and `capital` is a title reference in landed_titles.
   const candidates = [
     title ? numberOrNull(title["province"]) : null,
     title ? numberOrNull(title["capital_province"]) : null,
-    title ? numberOrNull(title["capital"]) : null,
-    titleId,
   ].filter((value): value is number => value !== null);
 
   for (const candidate of [...new Set(candidates)]) {
     if (provinceRecord(q, candidate)) return candidate;
   }
 
-  const provinces = obj(q.at("/provinces")) ?? obj(q.at("/provinces/provinces"));
+  // Some saves expose an inverse province -> title link instead. Prefer the nested
+  // province database when both the wrapper and nested object exist.
+  const provinces = obj(q.at("/provinces/provinces")) ?? obj(q.at("/provinces"));
   if (!provinces) return null;
   for (const [provinceIdText, rawProvince] of Object.entries(provinces)) {
     const province = obj(rawProvince);
