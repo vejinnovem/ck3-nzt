@@ -198,6 +198,17 @@ function pushUniqueTitle(target: ImportantActionTitleRef[], reference: Important
   target.push(reference);
 }
 
+const CHARACTER_SCOPE_TYPES = new Set(["char", "character"]);
+const TITLE_SCOPE_TYPES = new Set([
+  "title",
+  "landed_title",
+  "barony",
+  "county",
+  "duchy",
+  "kingdom",
+  "empire",
+]);
+
 function resolveScopeReferences(
   q: Query,
   loc: Localizer,
@@ -211,20 +222,43 @@ function resolveScopeReferences(
 
   const visit = (current: unknown, path: string, depth: number) => {
     if (depth > 8) return;
-    const id = num(current);
-    if (id !== null) {
-      pushUniqueCharacter(characterRefs, characterRef(q, loc, path, id));
-      pushUniqueTitle(titleRefs, titleRef(q, loc, path, id));
-      return;
-    }
     if (Array.isArray(current)) {
       current.forEach((entry, index) => visit(entry, `${path}[${index}]`, depth + 1));
       return;
     }
+
     const record = obj(current);
-    if (!record) return;
-    for (const [key, entry] of Object.entries(record)) {
-      visit(entry, path ? `${path}.${key}` : key, depth + 1);
+    if (record) {
+      const scopeType = typeof record["type"] === "string" ? record["type"] : null;
+      const identity = num(record["identity"]);
+      if (scopeType !== null && identity !== null) {
+        const identityPath = `${path}.identity`;
+        if (CHARACTER_SCOPE_TYPES.has(scopeType)) {
+          pushUniqueCharacter(characterRefs, characterRef(q, loc, identityPath, identity));
+        } else if (TITLE_SCOPE_TYPES.has(scopeType)) {
+          pushUniqueTitle(titleRefs, titleRef(q, loc, identityPath, identity));
+        }
+
+        for (const [key, entry] of Object.entries(record)) {
+          if (key === "type" || key === "identity") continue;
+          visit(entry, path ? `${path}.${key}` : key, depth + 1);
+        }
+        return;
+      }
+
+      for (const [key, entry] of Object.entries(record)) {
+        visit(entry, path ? `${path}.${key}` : key, depth + 1);
+      }
+      return;
+    }
+
+    const id = num(current);
+    if (id !== null) {
+      // Untyped legacy/wrapper values remain best-effort: resolve against both namespaces.
+      // Typed scope objects above must not be cross-resolved because character IDs and
+      // landed-title IDs are independent namespaces and can legitimately collide.
+      pushUniqueCharacter(characterRefs, characterRef(q, loc, path, id));
+      pushUniqueTitle(titleRefs, titleRef(q, loc, path, id));
     }
   };
 
@@ -336,6 +370,6 @@ export function extractImportantActions(
     limitation:
       entries.length > maxActions
         ? `Only the first ${maxActions} serialized Important Action records are included; use underlying realm data for authoritative advisory decisions.`
-        : "Important Action records are UI/advisory state. Nested scope references are resolved best-effort against live character/title IDs; unresolved scope primitives remain exposed for diagnosis.",
+        : "Important Action records are UI/advisory state. Nested scope references are resolved best-effort against typed character/title namespaces; unresolved scope primitives remain exposed for diagnosis.",
   };
 }
