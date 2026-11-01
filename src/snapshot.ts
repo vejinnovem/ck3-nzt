@@ -44,6 +44,20 @@ export interface RealmOverview {
   prestige: number | null;
   piety: number | null;
 }
+
+export interface WarScoreCapability {
+  /** CK3 computes the player-visible total in runtime; active_wars does not serialize it directly. */
+  fullPlayerVisibleWarScoreAvailable: false;
+  source: "runtime_computed_not_serialized";
+  reconstruction: "not_implemented";
+  knownSerializedComponents: ["ticking_war_score", "controls_all", "battle_results"];
+  limitation: string;
+}
+
+export interface SnapshotMilitaryInfo extends MilitaryInfo {
+  warScoreCapability: WarScoreCapability;
+}
+
 export interface Snapshot {
   date: string;
   parsedAt: number;
@@ -56,7 +70,7 @@ export interface Snapshot {
   economy?: RealmEconomyInfo;
   council?: CouncilInfo;
   courtPositions?: CourtPositionsInfo;
-  military: MilitaryInfo;
+  military: SnapshotMilitaryInfo;
   operationalArmies?: OperationalArmiesSummary;
   succession: SuccessionInfo;
   diplomacy: DiplomacyInfo;
@@ -137,7 +151,18 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
     const economy = extractRealmEconomy(q, loc);
     const council = extractCouncil(q, loc);
     const courtPositions = extractCourtPositions(q, loc);
-    const military = correctMilitaryLiveFields(q, extractMilitary(q, loc));
+    const militaryBase = correctMilitaryLiveFields(q, extractMilitary(q, loc));
+    const military: SnapshotMilitaryInfo = {
+      ...militaryBase,
+      warScoreCapability: {
+        fullPlayerVisibleWarScoreAvailable: false,
+        source: "runtime_computed_not_serialized",
+        reconstruction: "not_implemented",
+        knownSerializedComponents: ["ticking_war_score", "controls_all", "battle_results"],
+        limitation:
+          "Exact UI war score requires reconstruction from occupation state, CB/static game-data scaling, battle results, prisoners/capital and other runtime modifiers; do not sum the serialized components as a total war score.",
+      },
+    };
     const operationalArmies = correctOperationalArmiesLiveFields(
       q,
       loc,
