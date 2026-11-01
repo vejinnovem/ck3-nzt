@@ -290,7 +290,7 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
     const courtPositions = extractCourtPositions(q, loc);
     const militaryBase = correctRaidDomainRelevance(
       q,
-      correctMilitaryLiveFields(q, extractMilitary(q, loc)),
+      correctMilitaryLiveFields(q, extractMilitary(q, loc), loc),
     );
     const military: SnapshotMilitaryInfo = {
       ...militaryBase,
