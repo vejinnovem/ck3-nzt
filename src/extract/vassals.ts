@@ -19,7 +19,26 @@ export interface VassalInfo {
 }
 
 function num(v: unknown): number | null {
-  return typeof v === "number" ? v : null;
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function obj(v: unknown): Record<string, unknown> | null {
+  return v !== null && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : null;
+}
+
+function numberList(v: unknown): number[] {
+  if (typeof v === "number" && Number.isFinite(v)) return [v];
+  if (!Array.isArray(v)) return [];
+  return v.filter((entry): entry is number => typeof entry === "number" && Number.isFinite(entry));
+}
+
+function strengthForLiege(q: Query, vassalId: number): number {
+  const sfl = q.at(`/living/${vassalId}/landed_data/strength_for_liege`);
+  if (typeof sfl === "number") return sfl;
+  const strength = q.at(`/living/${vassalId}/landed_data/strength`);
+  return typeof strength === "number" ? strength : 0;
 }
 
 /** Returns factions targeting the player + the set of their member char ids */
@@ -80,7 +99,7 @@ export function extractFactions(
   return { factions, memberIds };
 }
 
-/** topN vassals by strengthForLiege; uses faction memberIds + single opinion pass */
+/** topN vassals by strengthForLiege; uses contracts plus de-facto title links */
 export function extractVassals(
   q: Query,
   loc: Localizer,
@@ -90,38 +109,48 @@ export function extractVassals(
   void loc;
   const playerId = q.at("/played_character/character") as number;
 
-  // 1. Resolve vassal contract ids from player's landed_data
-  const contractIds =
-    (q.at(`/living/${playerId}/landed_data/vassal_contracts`) as number[] | undefined) ?? [];
-
-  // 2. For each contract, resolve the vassal character id and their strength_for_liege
   type VassalEntry = { id: number; strength: number };
-  const entries: VassalEntry[] = [];
+  const byId = new Map<number, VassalEntry>();
+  const addVassal = (vassalId: number): void => {
+    if (vassalId === playerId || byId.has(vassalId)) return;
+    byId.set(vassalId, { id: vassalId, strength: strengthForLiege(q, vassalId) });
+  };
+
+  // 1. Preferred source: explicit vassal contracts.
+  const contractIds = numberList(q.at(`/living/${playerId}/landed_data/vassal_contracts`));
   for (const cid of contractIds) {
-    const contract = q.at(`/vassal_contracts/active/${cid}`) as Record<string, unknown> | undefined;
-    if (!contract || typeof contract !== "object") continue;
-    const vassalId = contract["vassal"];
-    if (typeof vassalId !== "number") continue;
-
-    const sfl = q.at(`/living/${vassalId}/landed_data/strength_for_liege`);
-    const strength =
-      typeof sfl === "number"
-        ? sfl
-        : typeof q.at(`/living/${vassalId}/landed_data/strength`) === "number"
-          ? (q.at(`/living/${vassalId}/landed_data/strength`) as number)
-          : 0;
-
-    entries.push({ id: vassalId, strength });
+    const contract = obj(q.at(`/vassal_contracts/active/${cid}`));
+    if (!contract) continue;
+    const vassalId = num(contract["vassal"]);
+    if (vassalId !== null) addVassal(vassalId);
   }
 
-  // 3. Sort desc by strength, take topN; record total before cap
-  entries.sort((a, b) => b.strength - a.strength);
+  // 2. Fallback for governments/situations where a direct vassal does not have a
+  // serialized vassal_contract entry (observed after granting a tribal county).
+  // A title held by someone else whose de-facto liege is one of the player's held
+  // titles identifies that holder as a direct vassal. Deduplicate by character.
+  const playerDomain = new Set(numberList(q.at(`/living/${playerId}/landed_data/domain`)));
+  const landedTitles = obj(q.at("/landed_titles/landed_titles"));
+  if (playerDomain.size > 0 && landedTitles) {
+    for (const rawTitle of Object.values(landedTitles)) {
+      const title = obj(rawTitle);
+      if (!title) continue;
+      const holder = num(title["holder"]);
+      const deFactoLiege = num(title["de_facto_liege"]);
+      if (holder === null || deFactoLiege === null) continue;
+      if (!playerDomain.has(deFactoLiege)) continue;
+      addVassal(holder);
+    }
+  }
+
+  // 3. Sort desc by strength, take topN; record total before cap.
+  const entries = [...byId.values()].sort((a, b) => b.strength - a.strength);
   const total = entries.length;
   const topEntries = entries.slice(0, topN);
   const topIds = new Set(topEntries.map((e) => e.id));
 
   // 4. Council seat set
-  const council = (q.at(`/living/${playerId}/landed_data/council`) as number[] | undefined) ?? [];
+  const council = numberList(q.at(`/living/${playerId}/landed_data/council`));
   const councilSet = new Set(council);
 
   // 5. Single pass over active_opinions — accumulate only for topN vassals targeting player
