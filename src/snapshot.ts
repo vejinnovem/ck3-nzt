@@ -6,6 +6,10 @@ import {
   extractOperationalArmies,
   type OperationalArmiesSummary,
 } from "./extract/operationalArmies.js";
+import {
+  correctMilitaryLiveFields,
+  correctOperationalArmiesLiveFields,
+} from "./extract/liveSaveCorrections.js";
 import { extractSuccession, type SuccessionInfo } from "./extract/succession.js";
 import { extractDiplomacy, type DiplomacyInfo } from "./extract/diplomacy.js";
 import {
@@ -133,8 +137,12 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
     const economy = extractRealmEconomy(q, loc);
     const council = extractCouncil(q, loc);
     const courtPositions = extractCourtPositions(q, loc);
-    const military = extractMilitary(q, loc);
-    const operationalArmies = extractOperationalArmies(q, loc);
+    const military = correctMilitaryLiveFields(q, extractMilitary(q, loc));
+    const operationalArmies = correctOperationalArmiesLiveFields(
+      q,
+      loc,
+      extractOperationalArmies(q, loc),
+    );
     const expansion = groupStrategicTargetsByRuler(extractExpansion(q, loc, military.wars));
     const succession = extractSuccession(q, loc);
     const diplomacy = extractDiplomacy(q, loc);
