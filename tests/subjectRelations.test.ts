@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { buildSnapshot } from "../src/snapshot.js";
 import { Localizer } from "../src/localization.js";
 
-test("extracts independent subject contracts as tributaries and player puppet refs", async () => {
+test("extracts independent legacy subject contracts as tributaries and player puppet refs", async () => {
   const gs = Buffer.from(`date=880.3.29
 meta_data={ meta_player_name="King" meta_title_name="Poland" meta_player_tier=4 meta_house_name="Piast" }
 played_character={ character=1 player=1 }
@@ -37,7 +37,7 @@ relations={ active_relations={
       independentSubject: true,
       levels: [1, 2, 3, 4],
       classificationSource: "independent_subject_contract",
-      evidence: [],
+      evidence: ["vassal_contracts"],
     },
   ]);
 
@@ -48,5 +48,51 @@ relations={ active_relations={
     playerRole: "puppeteer",
     source: "player_character",
     evidence: ["puppet.theological_agent_puppet"],
+  });
+});
+
+test("reads CK3 1.20 subject_contracts and classifies clerical puppet cooldown evidence", async () => {
+  const gs = Buffer.from(`date=880.3.30
+meta_data={ meta_player_name="King" meta_title_name="Poland" meta_player_tier=4 meta_house_name="Piast" }
+played_character={ character=1 player=1 }
+landed_titles={ landed_titles={
+ 10={ key="k_player" holder=1 }
+ 20={ key="c_tributary" holder=2 }
+} }
+living={
+ 1={ first_name="Siemowit" landed_data={ domain={ 10 } } }
+ 2={ first_name="Lucjan" landed_data={ domain={ 20 } } }
+ 4={ first_name="Gracja" }
+}
+subject_contracts={ active={
+ 200={ subject=2 suzerain=1 levels={ 7 8 } }
+} }
+relations={ active_relations={
+ { first=1 second=4 cooldown_against_recipient_0={ make_clerical_puppet_interaction=881.1.1 } }
+} }
+`);
+
+  const diplomacy = (await buildSnapshot(gs, new Localizer(null))).diplomacy;
+
+  expect(diplomacy.tributaries).toEqual([
+    {
+      contractId: 200,
+      id: 2,
+      name: "Lucjan",
+      playerRole: "suzerain",
+      independentSubject: true,
+      levels: [7, 8],
+      classificationSource: "serialized_marker",
+      evidence: ["subject_contracts", "suzerain"],
+    },
+  ]);
+
+  expect(diplomacy.puppets).toContainEqual({
+    id: 4,
+    name: "Gracja",
+    type: "realm_priest",
+    playerRole: "unknown",
+    source: "active_relations",
+    evidence: ["cooldown_against_recipient_0.make_clerical_puppet_interaction"],
   });
 });
