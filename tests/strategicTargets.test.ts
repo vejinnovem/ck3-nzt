@@ -44,9 +44,12 @@ landed_titles={ landed_titles={
   62={ key="c_dobrzyn" name="Dobrzyn" holder=600 de_jure_liege=10 }
 } }
 living={
-  100={ first_name="Siemowit" landed_data={ domain={ 20 21 } current_strength=2100 strength=2100 } }
-  600={ first_name="Stefan" landed_data={ domain={ 60 61 62 } current_strength=1200 strength=1300 } }
+  100={ first_name="Siemowit" landed_data={ domain={ 20 21 } government="tribal_government" current_strength=2100 strength=2100 } }
+  600={ first_name="Stefan" landed_data={ domain={ 60 61 62 } government="tribal_government" current_strength=1200 strength=1300 } }
 }
+relations={ active_relations={
+  { first=100 second=600 truce_0={ date=876.8.1 result="victory" } }
+} }
 `);
 
 const run = () =>
@@ -62,7 +65,8 @@ describe("strategic expansion targets", () => {
       deJureKingdomId: 10,
       deJureKingdomName: "Poland",
       exactAdjacencyAvailable: false,
-      casusBelliCoverage: "claims_and_direct_de_jure_only",
+      casusBelliCoverage: "claims_direct_de_jure_and_partial_tribal_rules",
+      casusBelliLimitations: expect.arrayContaining([expect.stringContaining("neighbor_land")]),
     });
     expect(e.strategicTargets.map((t) => t.realmName)).toEqual(["Silesia", "Pomerania"]);
     expect(e.strategicTargets[0]!.relevantTitles.map((t) => t.title)).toEqual([
@@ -72,6 +76,7 @@ describe("strategic expansion targets", () => {
     expect(e.strategicTargets[0]!.currentStrength).toBe(1400);
     expect(e.strategicTargets[0]!.playerToTargetStrengthRatio).toBeCloseTo(2000 / 1400);
     expect(e.strategicTargets[0]!.relevantTitles[0]!.confirmedCasusBelli).toEqual(["claim"]);
+    expect(e.strategicTargets[0]!.relevantTitles[0]!.candidateCasusBelli).toEqual([]);
   });
 
   it("includes target alliances and active wars, but excludes realms outside the kingdom", async () => {
@@ -94,6 +99,28 @@ describe("strategic expansion targets", () => {
     expect(e.strategicTargets.flatMap((target) => target.relevantTitles.map((title) => title.title))).toEqual([
       "Kujawy",
       "Dobrzyn",
+    ]);
+  });
+
+  it("emits conservative tribal conquest and subjugation candidates with truce blockers", async () => {
+    const e = await runPrimaryRealm();
+    const target = e.strategicTargets[0]!;
+    expect(target.truceUntil).toBe("876.8.1");
+    expect(target.candidateCasusBelli).toEqual([
+      expect.objectContaining({
+        type: "tribal_subjugation",
+        scope: "realm",
+        availability: "blocked",
+        blockers: ["truce_until:876.8.1"],
+      }),
+    ]);
+    expect(target.relevantTitles[0]!.candidateCasusBelli).toEqual([
+      expect.objectContaining({
+        type: "county_conquest",
+        scope: "title",
+        availability: "blocked",
+        blockers: ["truce_until:876.8.1"],
+      }),
     ]);
   });
 });
