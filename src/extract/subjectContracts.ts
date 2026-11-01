@@ -13,6 +13,7 @@ const LIEGE_FIELDS = ["liege", "suzerain"] as const;
 const CONTRACT_ID_FIELDS = ["id", "contract_id", "subject_contract_id", "vassal_contract_id"] as const;
 const INACTIVE_CONTAINER_PATTERN = /(inactive|expired|history|past|terminated|removed)/i;
 const PREFERRED_CONTAINER_PATTERN = /^(active|active_contracts|contracts|contract_database|database|entries)$/i;
+const CONTRACT_MANAGER_PATTERN = /(?:subject|vassal|tribut).*contract|contract.*(?:subject|vassal|tribut)/i;
 
 function hasNumericField(value: Obj, fields: readonly string[]): boolean {
   return fields.some((field) => typeof value[field] === "number");
@@ -24,9 +25,11 @@ function looksLikeSubjectContract(value: unknown): value is Obj {
   return hasNumericField(obj, SUBJECT_FIELDS) && hasNumericField(obj, LIEGE_FIELDS);
 }
 
-function contractIdFrom(key: string, contract: Obj): number | null {
-  const keyId = Number(key);
-  if (Number.isFinite(keyId)) return keyId;
+function contractIdFrom(key: string | null, contract: Obj): number | null {
+  if (key !== null && key.trim() !== "") {
+    const keyId = Number(key);
+    if (Number.isFinite(keyId)) return keyId;
+  }
 
   for (const field of CONTRACT_ID_FIELDS) {
     const value = contract[field];
@@ -37,20 +40,30 @@ function contractIdFrom(key: string, contract: Obj): number | null {
 
 /**
  * Jomini has exposed CK3 contract managers in more than one shape across patches.
- * Normalise any object whose children are actual subject-contract records into the
- * numeric-id map expected by the diplomacy extractor.
+ * Normalise any object/array whose children are actual subject-contract records into
+ * the numeric-id map expected by the diplomacy extractor.
  */
 function normaliseContractCollection(value: unknown): Obj | null {
+  const result: Obj = {};
+
+  if (Array.isArray(value)) {
+    for (const child of value) {
+      if (!looksLikeSubjectContract(child)) continue;
+      const id = contractIdFrom(null, child);
+      if (id === null) continue;
+      result[String(id)] = child;
+    }
+    return Object.keys(result).length > 0 ? result : null;
+  }
+
   const obj = asObject(value);
   if (!obj) return null;
 
-  const result: Obj = {};
   for (const [key, child] of Object.entries(obj)) {
     if (!looksLikeSubjectContract(child)) continue;
-    const childObj = child as Obj;
-    const id = contractIdFrom(key, childObj);
+    const id = contractIdFrom(key, child);
     if (id === null) continue;
-    result[String(id)] = childObj;
+    result[String(id)] = child;
   }
 
   return Object.keys(result).length > 0 ? result : null;
@@ -65,11 +78,19 @@ function findNestedContractCollection(
   if (direct) return { active: direct, source };
   if (depth >= 6) return null;
 
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      const found = findNestedContractCollection(value[index], `${source}[${index}]`, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+
   const obj = asObject(value);
   if (!obj) return null;
 
   const children = Object.entries(obj)
-    .filter(([, child]) => asObject(child) !== null)
+    .filter(([, child]) => asObject(child) !== null || Array.isArray(child))
     .filter(([key]) => !INACTIVE_CONTAINER_PATTERN.test(key))
     .sort(([a], [b]) => {
       const aPreferred = PREFERRED_CONTAINER_PATTERN.test(a) ? 0 : 1;
@@ -85,12 +106,26 @@ function findNestedContractCollection(
   return null;
 }
 
+function discoverRenamedContractManager(q: Query): { active: Obj; source: string } | null {
+  const root = asObject(q.root());
+  if (!root) return null;
+
+  for (const [key, value] of Object.entries(root)) {
+    if (!CONTRACT_MANAGER_PATTERN.test(key)) continue;
+    if (key === "subject_contracts" || key === "vassal_contracts") continue;
+    const found = findNestedContractCollection(value, key);
+    if (found) return found;
+  }
+
+  return null;
+}
+
 /**
  * CK3 renamed vassal contracts to subject contracts when tributaries were introduced.
  * Older saves / parser fixtures can still expose the legacy vassal_contracts path.
- * Newer saves can also wrap the actual contract-id map in another manager object, so
- * prefer the historical /active paths but fall back to discovering the live collection
- * below either top-level contract manager.
+ * Newer saves can also wrap the actual contract-id map in another manager object or
+ * serialize it as an array. Prefer the historical /active paths, then discover records
+ * below either known manager, and finally probe renamed top-level contract managers.
  */
 export function activeSubjectContracts(q: Query): {
   active: Obj | null;
@@ -109,6 +144,9 @@ export function activeSubjectContracts(q: Query): {
   const legacyRoot = q.at("/vassal_contracts");
   const discoveredLegacy = findNestedContractCollection(legacyRoot, "vassal_contracts");
   if (discoveredLegacy) return discoveredLegacy;
+
+  const renamed = discoverRenamedContractManager(q);
+  if (renamed) return renamed;
 
   return { active: null, source: "unavailable" };
 }
