@@ -1,6 +1,7 @@
 import type { Query } from "../parser.js";
 import type { Localizer } from "../localization.js";
 import type { War } from "./military.js";
+import { collectConfederationCoMemberIds } from "./confederations.js";
 import { forEachRelation, forEachWar } from "./scan.js";
 import { resolveTitleName, titleTierFromKey, type TitleTier } from "./titleUtils.js";
 
@@ -22,6 +23,13 @@ export interface StrategicTargetAlly {
   realm: string | null;
 }
 
+export type StrategicTargetSupportSource = "alliance" | "confederation";
+
+export interface StrategicTargetDefensiveBacker extends StrategicTargetAlly {
+  currentStrength: number | null;
+  sources: StrategicTargetSupportSource[];
+}
+
 export interface StrategicTargetWar {
   side: "attacker" | "defender";
   cbType: string;
@@ -36,7 +44,17 @@ export interface StrategicExpansionTarget {
   strength: number | null;
   currentStrength: number | null;
   playerToTargetStrengthRatio: number | null;
+  /** Direct CK3 alliance relations only. */
   allies: StrategicTargetAlly[];
+  /** Character co-members of the ruler's CK3 confederation(s). */
+  confederationMembers: StrategicTargetAlly[];
+  /** Unique defenders expected from direct alliances and character confederation membership. */
+  defensiveBackers: StrategicTargetDefensiveBacker[];
+  /** Ruler + defensiveBackers current_strength, null if any component is unavailable. */
+  defensiveCurrentStrength: number | null;
+  /** Player + directly allied rulers current_strength (confederations are defensive-only). */
+  playerWithAlliesCurrentStrength: number | null;
+  playerToDefensiveStrengthRatio: number | null;
   wars: StrategicTargetWar[];
   relevantTitles: StrategicTargetTitle[];
   basis: "same_de_jure_kingdom";
@@ -116,6 +134,11 @@ function realmNameForCharacter(q: Query, loc: Localizer, characterId: number): s
   return realmTitleForCharacter(q, loc, characterId)?.name ?? null;
 }
 
+function currentStrengthForCharacter(q: Query, characterId: number): number | null {
+  const value = q.at(`/living/${characterId}/landed_data/current_strength`);
+  return typeof value === "number" ? value : null;
+}
+
 function collectAllies(q: Query, loc: Localizer, rulerId: number): StrategicTargetAlly[] {
   const out: StrategicTargetAlly[] = [];
   const seen = new Set<number>();
@@ -127,6 +150,55 @@ function collectAllies(q: Query, loc: Localizer, rulerId: number): StrategicTarg
     out.push({ id: otherId, name: charName(q, otherId), realm });
   });
   return out;
+}
+
+function collectConfederationMembers(
+  q: Query,
+  loc: Localizer,
+  rulerId: number,
+): StrategicTargetAlly[] {
+  const out: StrategicTargetAlly[] = [];
+  for (const memberId of collectConfederationCoMemberIds(q, rulerId)) {
+    const realm = realmNameForCharacter(q, loc, memberId);
+    if (realm === null) continue;
+    out.push({ id: memberId, name: charName(q, memberId), realm });
+  }
+  return out;
+}
+
+function mergeDefensiveBackers(
+  q: Query,
+  allies: StrategicTargetAlly[],
+  confederationMembers: StrategicTargetAlly[],
+  excludedCharacterId: number,
+): StrategicTargetDefensiveBacker[] {
+  const byId = new Map<number, StrategicTargetDefensiveBacker>();
+  const add = (supporter: StrategicTargetAlly, source: StrategicTargetSupportSource) => {
+    if (supporter.id === excludedCharacterId) return;
+    const existing = byId.get(supporter.id);
+    if (existing) {
+      if (!existing.sources.includes(source)) existing.sources.push(source);
+      return;
+    }
+    byId.set(supporter.id, {
+      ...supporter,
+      currentStrength: currentStrengthForCharacter(q, supporter.id),
+      sources: [source],
+    });
+  };
+  for (const ally of allies) add(ally, "alliance");
+  for (const member of confederationMembers) add(member, "confederation");
+  return [...byId.values()];
+}
+
+function sumCurrentStrengths(q: Query, characterIds: number[]): number | null {
+  let total = 0;
+  for (const id of characterIds) {
+    const strength = currentStrengthForCharacter(q, id);
+    if (strength === null) return null;
+    total += strength;
+  }
+  return total;
 }
 
 function collectWars(q: Query, loc: Localizer, rulerId: number): StrategicTargetWar[] {
@@ -219,6 +291,11 @@ function extractStrategicTargets(
 
   const playerStrengthRaw = q.at(`/living/${playerId}/landed_data/current_strength`);
   const playerStrength = typeof playerStrengthRaw === "number" ? playerStrengthRaw : null;
+  const playerAllies = collectAllies(q, loc, playerId).filter((ally) => ally.id !== playerId);
+  const playerWithAlliesCurrentStrength =
+    playerStrength === null
+      ? null
+      : sumCurrentStrengths(q, [playerId, ...new Set(playerAllies.map((ally) => ally.id))]);
   const grouped = new Map<number, StrategicExpansionTarget>();
 
   for (const [idStr, title] of Object.entries(titles)) {
@@ -248,6 +325,26 @@ function extractStrategicTargets(
           ? playerStrength / currentStrength
           : null;
       const realmTitle = realmTitleForCharacter(q, loc, rulerId);
+      const allies = collectAllies(q, loc, rulerId).filter((ally) => ally.id !== playerId);
+      const confederationMembers = collectConfederationMembers(q, loc, rulerId).filter(
+        (member) => member.id !== playerId,
+      );
+      const defensiveBackers = mergeDefensiveBackers(
+        q,
+        allies,
+        confederationMembers,
+        playerId,
+      );
+      const defensiveCurrentStrength = sumCurrentStrengths(q, [
+        rulerId,
+        ...defensiveBackers.map((backer) => backer.id),
+      ]);
+      const playerToDefensiveStrengthRatio =
+        playerWithAlliesCurrentStrength !== null &&
+        defensiveCurrentStrength !== null &&
+        defensiveCurrentStrength > 0
+          ? playerWithAlliesCurrentStrength / defensiveCurrentStrength
+          : null;
       target = {
         realmTitleId: realmTitle?.id ?? topTitleId,
         realmName: realmTitle?.name ?? resolveTitleName(q, loc, topTitleId),
@@ -256,7 +353,12 @@ function extractStrategicTargets(
         strength,
         currentStrength,
         playerToTargetStrengthRatio: ratio,
-        allies: collectAllies(q, loc, rulerId),
+        allies,
+        confederationMembers,
+        defensiveBackers,
+        defensiveCurrentStrength,
+        playerWithAlliesCurrentStrength,
+        playerToDefensiveStrengthRatio,
         wars: collectWars(q, loc, rulerId),
         relevantTitles: [],
         basis: "same_de_jure_kingdom",
@@ -273,11 +375,12 @@ function extractStrategicTargets(
   }
 
   const strategicTargets = [...grouped.values()].sort((a, b) => {
-    if (a.currentStrength === null && b.currentStrength === null)
-      return a.realmName.localeCompare(b.realmName);
-    if (a.currentStrength === null) return 1;
-    if (b.currentStrength === null) return -1;
-    return a.currentStrength - b.currentStrength;
+    const aStrength = a.defensiveCurrentStrength ?? a.currentStrength;
+    const bStrength = b.defensiveCurrentStrength ?? b.currentStrength;
+    if (aStrength === null && bStrength === null) return a.realmName.localeCompare(b.realmName);
+    if (aStrength === null) return 1;
+    if (bStrength === null) return -1;
+    return aStrength - bStrength;
   });
 
   return {

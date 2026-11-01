@@ -13,8 +13,9 @@ export function registerExpansionTool(server: McpServer, cache: SnapshotCache) {
       title: "Expansion",
       description:
         "Stored expansion levers: your title claims, de jure opportunities, ongoing-war targets, " +
-        "and save-derived strategic targets inside your de-jure kingdom. Exact map adjacency and " +
-        "the full dynamic CK3 casus-belli calculation are not inferred from save data alone.",
+        "and save-derived strategic targets inside your de-jure kingdom. Strategic targets distinguish " +
+        "direct alliances from CK3 confederation co-members and estimate the defensive coalition from both. " +
+        "Exact map adjacency and the full dynamic CK3 casus-belli calculation are not inferred from save data alone.",
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -60,14 +61,24 @@ export function registerExpansionTool(server: McpServer, cache: SnapshotCache) {
           body += "None found in the current de-jure kingdom scope.\n";
         } else {
           for (const target of shownTargets) {
-            const ratio =
+            const rulerOnlyRatio =
               target.playerToTargetStrengthRatio === null
                 ? "?"
                 : target.playerToTargetStrengthRatio.toFixed(2);
+            const coalitionRatio =
+              target.playerToDefensiveStrengthRatio === null
+                ? "?"
+                : target.playerToDefensiveStrengthRatio.toFixed(2);
             const allies =
               target.allies.length === 0
                 ? "none"
                 : target.allies.map((ally) => ally.realm ?? ally.name).join(", ");
+            const confederationMembers =
+              target.confederationMembers.length === 0
+                ? "none"
+                : target.confederationMembers
+                    .map((member) => member.realm ?? member.name)
+                    .join(", ");
             const wars =
               target.wars.length === 0
                 ? "none"
@@ -82,9 +93,13 @@ export function registerExpansionTool(server: McpServer, cache: SnapshotCache) {
               })
               .join("; ");
             body +=
-              `- ${target.realmName} — ruler ${target.rulerName}; army ` +
+              `- ${target.realmName} — ruler ${target.rulerName}; ruler army ` +
               `${formatStrength(target.currentStrength)}/${formatStrength(target.strength)}; ` +
-              `our/current ratio ${ratio}; allies ${allies}; wars ${wars}; titles: ${titles}\n`;
+              `expected defender coalition ${formatStrength(target.defensiveCurrentStrength)}; ` +
+              `our coalition ${formatStrength(target.playerWithAlliesCurrentStrength)}; ` +
+              `coalition ratio ${coalitionRatio}; ruler-only ratio ${rulerOnlyRatio}; ` +
+              `direct allies ${allies}; confederation defenders ${confederationMembers}; ` +
+              `wars ${wars}; titles: ${titles}\n`;
           }
           body += targetNote;
         }
