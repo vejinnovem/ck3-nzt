@@ -139,6 +139,28 @@ function successionAssignmentSignature(snapshot: Snapshot): string | null {
     .join("|");
 }
 
+function stringListSignature(values: string[] | undefined): string | null {
+  if (!values || values.length === 0) return null;
+  return [...values].sort((a, b) => a.localeCompare(b)).join("|");
+}
+
+function heirBetrothalSignature(snapshot: Snapshot): string | null {
+  const heirs = snapshot.succession?.heirProfiles;
+  if (!heirs || heirs.length === 0) return null;
+
+  return [...heirs]
+    .sort((a, b) => a.position - b.position || a.id - b.id)
+    .map((heir) => {
+      const betrothed = heir.betrothed;
+      return `${heir.id}:${heir.name}=${
+        betrothed
+          ? `${betrothed.id}:${betrothed.name}:${betrothed.dynastyHouseId ?? ""}`
+          : ""
+      }`;
+    })
+    .join("|");
+}
+
 function importantActionCount(snapshot: Snapshot, type: string): number {
   return snapshot.importantActions?.actions.filter((action) => action.type === type).length ?? 0;
 }
@@ -216,6 +238,8 @@ export function summarizeSnapshot(snapshot: Snapshot): Record<string, Scalar> {
 
   return {
     "ruler.name": snapshot.overview.rulerName,
+    "ruler.health": snapshot.ruler?.health ?? null,
+    "ruler.traits": stringListSignature(snapshot.ruler?.traits),
     "realm.primaryTitle": snapshot.overview.primaryTitle,
     "realm.house": snapshot.overview.house,
     "economy.gold": snapshot.overview.gold,
@@ -232,6 +256,7 @@ export function summarizeSnapshot(snapshot: Snapshot): Record<string, Scalar> {
     "realm.heldCounties": titleSignature(snapshot.titles?.counties),
     "realm.heldDuchies": titleSignature(snapshot.titles?.duchies),
     "succession.titleAssignments": successionAssignmentSignature(snapshot),
+    "succession.heirBetrothals": heirBetrothalSignature(snapshot),
     "military.levy": snapshot.military.levy,
     "military.strength": snapshot.military.strength,
     "military.currentStrength": snapshot.military.currentStrength,
@@ -525,6 +550,62 @@ export async function persistSnapshot(
     const changes = buildChanges(previous, snapshot);
     const maxFactionRatio = maxFactionPowerRatio(snapshot);
     const createdAt = new Date().toISOString();
+
+    if (previousRow && previous && previousRow.game_date === snapshot.date && changes.changes.length === 0) {
+      const materialPreviousRow = previousStoredSnapshot(db, previousRow.id);
+      const materialPrevious = parseStoredSnapshot(materialPreviousRow);
+      const preservedChanges = buildChanges(materialPrevious, snapshot);
+
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.prepare(`
+          UPDATE snapshots SET
+            source_fingerprint = ?, game_date = ?, parsed_at = ?, ruler_name = ?, primary_title = ?,
+            gold = ?, military_strength = ?, current_strength = ?,
+            vassal_count = ?, faction_count = ?, max_faction_ratio = ?, snapshot_json = ?
+          WHERE id = ?
+        `).run(
+          options.sourceFingerprint,
+          snapshot.date,
+          snapshot.parsedAt,
+          snapshot.overview.rulerName,
+          snapshot.overview.primaryTitle,
+          snapshot.overview.gold,
+          snapshot.military.strength,
+          snapshot.military.currentStrength,
+          snapshot.vassalCount,
+          snapshot.factions.length,
+          maxFactionRatio,
+          JSON.stringify(snapshot),
+          previousRow.id,
+        );
+        db.prepare("DELETE FROM changes WHERE snapshot_id = ?").run(previousRow.id);
+        insertChanges(db, previousRow.id, preservedChanges);
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+
+      await writeExports(
+        db,
+        outputDir,
+        snapshot,
+        previousRow.id,
+        options.sourceFingerprint,
+        preservedChanges,
+        createdAt,
+        materialPrevious?.date ?? null,
+      );
+
+      return {
+        outputDir,
+        databasePath,
+        written: false,
+        refreshed: true,
+        changeCount: preservedChanges.changes.length,
+      };
+    }
 
     db.exec("BEGIN IMMEDIATE");
     let snapshotId: number;
