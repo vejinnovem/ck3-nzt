@@ -8,7 +8,7 @@ export function registerVassalsTool(server: McpServer, cache: SnapshotCache) {
     {
       title: "Vassals",
       description:
-        "Your most powerful direct vassals: military power owed, approximate opinion of you, council seat, and whether they're in a faction against you (danger flag).",
+        "Your most powerful direct vassals: dynasty/house when available, military power owed, approximate opinion, council/faction status, and their held counties with control, culture, faith/rite and popular opinion when serialized by CK3.",
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -26,11 +26,17 @@ export function registerVassalsTool(server: McpServer, cache: SnapshotCache) {
       } else {
         for (const v of shown) {
           const opinionStr = v.opinion !== null ? String(v.opinion) : "?";
+          const house = v.dynastyHouseName ?? (v.dynastyHouseId !== null ? `house ${v.dynastyHouseId}` : "no house recorded");
           const flags: string[] = [];
           if (v.councilSeat) flags.push("council");
           if (v.inFaction) flags.push("⚠ in faction");
           const flagStr = flags.length > 0 ? ", " + flags.join(", ") : "";
-          body += `- ${v.name} (${v.id}): power ${v.strengthForLiege}, opinion ${opinionStr}${flagStr}\n`;
+          body += `- ${v.name} (${v.id}, ${house}): power ${v.strengthForLiege}, opinion ${opinionStr}${flagStr}\n`;
+          for (const county of v.counties) {
+            const faith = county.faithName ?? county.faith ?? "?";
+            const rite = county.riteName ?? county.rite ?? "?";
+            body += `  - ${county.name}: control ${county.control ?? "?"}, culture ${county.cultureId ?? "?"}, faith ${faith}, rite ${rite}, popular opinion ${county.popularOpinion ?? "?"}\n`;
+          }
         }
         body += note;
       }

@@ -1,21 +1,35 @@
 import type { Query } from "../parser.js";
 import type { Localizer } from "../localization.js";
+import { extractCharacter } from "./characters.js";
+import {
+  countyContextsHeldBy,
+  extractCountyContext,
+  type CountyContextInfo,
+} from "./countyContext.js";
 
 export interface FactionInfo {
+  id: number | null;
   type: string;
   power: number | null;
   threshold: number | null;
   discontent: number | null;
   members: number;
+  leaderId: number | null;
   leaderName: string | null;
+  leaderDynastyHouseId: number | null;
+  leaderDynastyHouseName: string | null;
+  titleMembers: CountyContextInfo[];
 }
 export interface VassalInfo {
   id: number;
   name: string;
+  dynastyHouseId: number | null;
+  dynastyHouseName: string | null;
   strengthForLiege: number;
   opinion: number | null;
   councilSeat: boolean;
   inFaction: boolean;
+  counties: CountyContextInfo[];
 }
 
 function num(v: unknown): number | null {
@@ -75,12 +89,21 @@ function strengthForLiege(q: Query, vassalId: number): number {
   return typeof strength === "number" ? strength : 0;
 }
 
+function titleMemberIds(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  const ids: number[] = [];
+  for (const entry of value) {
+    const id = referenceNumber(entry, ["county", "title", "landed_title", "id", "value"]);
+    if (id !== null) ids.push(id);
+  }
+  return [...new Set(ids)];
+}
+
 /** Returns factions targeting the player + the set of their member char ids */
 export function extractFactions(
   q: Query,
   loc: Localizer,
 ): { factions: FactionInfo[]; memberIds: Set<number> } {
-  void loc;
   const playerId = q.at("/played_character/character") as number;
   const factionsObj = q.at("/faction_manager/factions") as Record<string, unknown> | undefined;
 
@@ -89,44 +112,42 @@ export function extractFactions(
 
   if (!factionsObj || typeof factionsObj !== "object") return { factions, memberIds };
 
-  for (const value of Object.values(factionsObj)) {
+  for (const [factionIdText, value] of Object.entries(factionsObj)) {
     // Skip "none" strings (sparse placeholders)
     if (typeof value !== "object" || value === null) continue;
     const f = value as Record<string, unknown>;
 
     if ((f["target"] as number | undefined) !== playerId) continue;
 
-    // Collect character member ids
     const members = f["members"] as Array<Record<string, unknown>> | undefined;
-    const titleMembers = f["title_members"] as unknown[] | undefined;
-    // FIX H: count title_members (counties) for peasant factions; only add character ids to memberIds
-    let memberCount = 0;
+    const countyMemberIds = titleMemberIds(f["title_members"]);
+    let characterMemberCount = 0;
     if (Array.isArray(members)) {
-      memberCount = members.length;
+      characterMemberCount = members.length;
       for (const m of members) {
         const charId = m["character"];
         if (typeof charId === "number") memberIds.add(charId);
       }
-    } else if (Array.isArray(titleMembers)) {
-      memberCount = titleMembers.length;
-      // title_members are county ids, not character ids — do NOT add to memberIds
     }
 
-    // Resolve leader name
-    const leaderId = f["leader"];
-    let leaderName: string | null = null;
-    if (typeof leaderId === "number") {
-      const raw = q.at(`/living/${leaderId}/first_name`);
-      leaderName = typeof raw === "string" ? raw : null;
-    }
+    const leaderId = referenceNumber(f["leader"], ["character", "id", "value"]);
+    const leader = leaderId === null ? null : extractCharacter(q, loc, leaderId);
+    const titleMembers = countyMemberIds
+      .map((titleId) => extractCountyContext(q, loc, titleId))
+      .filter((county): county is CountyContextInfo => county !== null);
 
     factions.push({
+      id: Number.isFinite(Number(factionIdText)) ? Number(factionIdText) : null,
       type: typeof f["type"] === "string" ? f["type"] : String(f["type"] ?? ""),
       power: num(f["power"]),
       threshold: num(f["power_threshold"]) ?? null,
       discontent: num(f["discontent"]),
-      members: memberCount,
-      leaderName,
+      members: characterMemberCount + countyMemberIds.length,
+      leaderId,
+      leaderName: leader?.name ?? null,
+      leaderDynastyHouseId: leader?.dynastyHouseId ?? null,
+      leaderDynastyHouseName: leader?.dynastyHouseName ?? null,
+      titleMembers,
     });
   }
 
@@ -140,7 +161,6 @@ export function extractVassals(
   factionMemberIds: Set<number>,
   topN = 8,
 ): { vassals: VassalInfo[]; total: number } {
-  void loc;
   const playerId = q.at("/played_character/character") as number;
 
   type VassalEntry = { id: number; strength: number };
@@ -228,17 +248,22 @@ export function extractVassals(
     opinionMap.set(owner, (opinionMap.get(owner) ?? 0) + value);
   }
 
-  // 7. Build final vassal list
+  // 7. Build final vassal list with their held counties. This keeps granted frontier
+  // counties visible after they leave the player's personal domain.
   const vassals = topEntries.map(({ id, strength }) => {
+    const character = extractCharacter(q, loc, id);
     const raw = q.at(`/living/${id}/first_name`);
-    const name = typeof raw === "string" ? raw : String(raw ?? id);
+    const name = character?.name ?? (typeof raw === "string" ? raw : String(raw ?? id));
     return {
       id,
       name,
+      dynastyHouseId: character?.dynastyHouseId ?? null,
+      dynastyHouseName: character?.dynastyHouseName ?? null,
       strengthForLiege: strength,
       opinion: opinionMap.has(id) ? opinionMap.get(id)! : null,
       councilSeat: councilSet.has(id),
       inFaction: factionMemberIds.has(id),
+      counties: countyContextsHeldBy(q, loc, id),
     };
   });
   return { vassals, total };

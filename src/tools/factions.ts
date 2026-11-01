@@ -8,7 +8,7 @@ export function registerFactionsTool(server: McpServer, cache: SnapshotCache) {
     {
       title: "Factions",
       description:
-        "Factions currently targeting you: type, strength vs. the threshold that triggers their demand (peasant factions use discontent), member count, and leader.",
+        "Factions currently targeting you: type, strength vs. demand threshold, member count and leader. County-based factions also include the affected counties with control, culture, faith/rite, holder and popular opinion when serialized by CK3.",
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -31,6 +31,12 @@ export function registerFactionsTool(server: McpServer, cache: SnapshotCache) {
               : `power ${f.power ?? "?"}/${f.threshold ?? "?"}`;
           const leaderStr = f.leaderName ?? "?";
           body += `- ${f.type}: ${powerStr} — ${f.members} members, leader ${leaderStr}\n`;
+          for (const county of f.titleMembers) {
+            const culture = county.cultureId ?? "?";
+            const faith = county.faithName ?? county.faith ?? "?";
+            const rite = county.riteName ?? county.rite ?? "?";
+            body += `  - ${county.name}: control ${county.control ?? "?"}, culture ${culture}, faith ${faith}, rite ${rite}, popular opinion ${county.popularOpinion ?? "?"}, holder ${county.holderName ?? county.holderId ?? "?"}\n`;
+          }
         }
         body += note;
       }
