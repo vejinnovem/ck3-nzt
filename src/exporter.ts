@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
+import { getBuildInfo } from "./buildInfo.js";
 import { resolveConfig, discoverGameDir, discoverSaveDir } from "./config.js";
 import { extractGamestate, IronmanError } from "./envelope.js";
 import { Localizer } from "./localization.js";
@@ -30,12 +31,15 @@ export async function exportLatest(): Promise<void> {
   const gamestate = extractGamestate(save);
   const gameDir = cfg.gameDir ?? (await discoverGameDir());
   const snapshot = await buildSnapshot(gamestate, new Localizer(gameDir));
+  const build = getBuildInfo();
+  Object.assign(snapshot, { build });
 
   // Deliberately print only the save filename, not the absolute path, so the
   // confirmation is useful without exposing the local Windows username/path.
   console.log(
     `Read save: ${basename(ref.path)} | game date: ${snapshot.date} | ruler: ${snapshot.overview.rulerName} | title: ${snapshot.overview.primaryTitle}`,
   );
+  console.log(`CK3-NZT build: ${build.buildId} | branch: ${build.gitBranch ?? "?"} | dirty: ${build.gitDirty ?? "?"}`);
   console.log(`Achievements: ${achievementLabel(snapshot.game?.achievementsEligible)}`);
 
   // Intentionally excludes the absolute save path and Windows username.
