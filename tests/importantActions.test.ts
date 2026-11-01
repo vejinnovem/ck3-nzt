@@ -74,6 +74,7 @@ test("extractImportantActions resolves nested UI advisory scope targets", async 
       },
     ],
     targetTitleRefs: [
+      { field: "scope.target.character", id: 20, name: "Collision County", key: "c_collision" },
       { field: "scope.target.title", id: 100, name: "Test County", key: "c_test" },
     ],
     scopePrimitiveFields: {
