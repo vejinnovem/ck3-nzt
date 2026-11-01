@@ -47,3 +47,52 @@ test("extractPlayerRealm follows de-facto title links instead of a geographic al
   });
   expect(realm?.counties.some((county) => county.name === "Foreign County")).toBe(false);
 });
+
+test("extractPlayerRealm also indexes strategically relevant foreign counties", async () => {
+  const gamestate = Buffer.from(`
+date=900.1.1
+played_character={ character=10 }
+landed_titles={ landed_titles={
+ 100={ key="k_home" name="Home Kingdom" holder=10 }
+ 1={ key="d_player" name="Player Duchy" holder=10 de_jure_liege=100 }
+ 2={ key="c_capital" name="Capital" holder=10 de_facto_liege=1 de_jure_liege=1 }
+ 200={ key="d_ally" name="Ally Duchy" holder=20 }
+ 201={ key="c_ally" name="Ally County" holder=20 de_facto_liege=200 de_jure_liege=100 }
+ 300={ key="k_enemy" name="Enemy Kingdom" holder=30 }
+ 301={ key="c_enemy" name="Enemy County" holder=30 de_facto_liege=300 de_jure_liege=300 }
+}}
+county_manager={ counties={
+ c_capital={ county_control=100 culture=1 }
+ c_ally={ county_control=80 culture=2 }
+ c_enemy={ county_control=60 culture=3 }
+}}
+living={
+ 10={ first_name="Player" landed_data={ domain={ 1 2 } } }
+ 20={ first_name="Ally" landed_data={ domain={ 200 201 } } }
+ 30={ first_name="Enemy" landed_data={ domain={ 300 301 } } }
+}
+relations={ active_relations={
+ { first=10 second=20 alliances={ { allied_through_0=10 allied_through_1=20 } } }
+} }
+wars={ active_wars={
+ 1={
+  attacker={ participants={ { character=10 } } }
+  defender={ participants={ { character=30 } } }
+ }
+} }
+`);
+
+  const realm = await queryGamestate(gamestate, (q) => extractPlayerRealm(q, new Localizer(null)));
+  expect(realm?.relevantForeignCountyCount).toBe(2);
+  expect(realm?.relevantForeignCounties.find((county) => county.name === "Ally County")).toMatchObject({
+    realmRulerId: 20,
+    relevance: expect.arrayContaining(["same_de_jure_kingdom", "ally_realm"]),
+  });
+  expect(realm?.relevantForeignCounties.find((county) => county.name === "Enemy County")).toMatchObject({
+    realmRulerId: 30,
+    relevance: ["active_war_enemy_realm"],
+  });
+  expect(realm?.relevantForeignCountsByReason.ally_realm).toBe(1);
+  expect(realm?.relevantForeignCountsByReason.active_war_enemy_realm).toBe(1);
+  expect(realm?.exactAdjacencyAvailable).toBe(false);
+});
