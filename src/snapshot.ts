@@ -2,6 +2,10 @@ import { queryGamestate, type Query } from "./parser.js";
 import type { Localizer } from "./localization.js";
 import { formatCk3Date } from "./format.js";
 import { extractMilitary, type MilitaryInfo } from "./extract/military.js";
+import {
+  extractOperationalArmies,
+  type OperationalArmiesSummary,
+} from "./extract/operationalArmies.js";
 import { extractSuccession, type SuccessionInfo } from "./extract/succession.js";
 import { extractDiplomacy, type DiplomacyInfo } from "./extract/diplomacy.js";
 import {
@@ -49,6 +53,7 @@ export interface Snapshot {
   council?: CouncilInfo;
   courtPositions?: CourtPositionsInfo;
   military: MilitaryInfo;
+  operationalArmies?: OperationalArmiesSummary;
   succession: SuccessionInfo;
   diplomacy: DiplomacyInfo;
   factions: FactionInfo[];
@@ -129,6 +134,7 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
     const council = extractCouncil(q, loc);
     const courtPositions = extractCourtPositions(q, loc);
     const military = extractMilitary(q, loc);
+    const operationalArmies = extractOperationalArmies(q, loc);
     const expansion = groupStrategicTargetsByRuler(extractExpansion(q, loc, military.wars));
     const succession = extractSuccession(q, loc);
     const diplomacy = extractDiplomacy(q, loc);
@@ -146,6 +152,7 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
       council,
       courtPositions,
       military,
+      operationalArmies,
       expansion,
       succession,
       diplomacy,
