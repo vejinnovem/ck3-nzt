@@ -1,9 +1,20 @@
 import type { Query } from "../parser.js";
 import type { Localizer } from "../localization.js";
 import { extractCharacter, type CharacterInfo } from "./characters.js";
+import { extractCountyContext, type CountyContextInfo } from "./countyContext.js";
+import { resolveTitleName, titleTierFromKey } from "./titleUtils.js";
 
 export type CouncilOffice = "chancellor" | "steward" | "marshal" | "spymaster" | "court_chaplain";
 export type CourtStatus = "courtier" | "guest";
+
+type Obj = Record<string, unknown>;
+type Primitive = string | number | boolean;
+
+export interface CouncilTaskDiagnostics {
+  fieldNames: string[];
+  primitiveFields: Record<string, Primitive>;
+  unresolvedTarget: boolean;
+}
 
 export interface CouncilTaskInfo {
   id: number;
@@ -11,6 +22,10 @@ export interface CouncilTaskInfo {
   ownerId: number | null;
   courtOwnerId: number | null;
   office: CouncilOffice | null;
+  targetTitleId: number | null;
+  targetTitle: string | null;
+  targetCounty: CountyContextInfo | null;
+  diagnostics?: CouncilTaskDiagnostics;
 }
 
 export interface CouncillorInfo {
@@ -70,14 +85,52 @@ const STANDARD_OFFICES: CouncilOffice[] = [
   "court_chaplain",
 ];
 
+const TARGETED_TASKS = new Set([
+  "task_integrate_title",
+  "task_develop_county",
+  "task_promote_culture",
+  "task_increase_control",
+  "task_fabricate_claim",
+  "task_convert_county",
+]);
+
 function numberOrNull(value: unknown): number | null {
-  return typeof value === "number" ? value : null;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function obj(value: unknown): Obj | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Obj)
+    : null;
 }
 
 function numberList(value: unknown): number[] {
   if (typeof value === "number") return [value];
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is number => typeof item === "number");
+}
+
+function referenceNumber(value: unknown, keys: string[]): number | null {
+  const direct = numberOrNull(value);
+  if (direct !== null) return direct;
+  const record = obj(value);
+  if (!record) return null;
+  for (const key of keys) {
+    const found = numberOrNull(record[key]);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+function primitiveFields(record: Obj, limit = 32): Record<string, Primitive> {
+  const result: Record<string, Primitive> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (Object.keys(result).length >= limit) break;
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      result[key] = value;
+    }
+  }
+  return result;
 }
 
 function officeForTask(type: string | null): CouncilOffice | null {
@@ -106,22 +159,60 @@ function officeForTask(type: string | null): CouncilOffice | null {
   return null;
 }
 
-function councilTask(q: Query, taskId: number | null): CouncilTaskInfo | null {
+function targetTitleId(q: Query, task: Obj): number | null {
+  for (const field of [
+    "target_title",
+    "target_county",
+    "county",
+    "landed_title",
+    "target",
+    "location",
+  ]) {
+    const candidate = referenceNumber(task[field], ["title", "landed_title", "county", "id", "value"]);
+    if (candidate === null) continue;
+    const key = q.at(`/landed_titles/landed_titles/${candidate}/key`);
+    if (typeof key === "string" && titleTierFromKey(key) !== "unknown") return candidate;
+  }
+  return null;
+}
+
+function councilTask(q: Query, loc: Localizer, taskId: number | null): CouncilTaskInfo | null {
   if (taskId === null) return null;
   const base = `/council_task_manager/active/${taskId}`;
+  const record = obj(q.at(base));
   const type = q.at(`${base}/type`);
   const ownerId = numberOrNull(q.at(`${base}/owner`));
   const courtOwnerId = numberOrNull(q.at(`${base}/court_owner`));
 
-  if (type === undefined && ownerId === null && courtOwnerId === null) return null;
+  if (!record && type === undefined && ownerId === null && courtOwnerId === null) return null;
   const taskType = typeof type === "string" ? type : null;
-  return {
+  const targetId = record ? targetTitleId(q, record) : null;
+  const targetKey =
+    targetId === null ? null : q.at(`/landed_titles/landed_titles/${targetId}/key`);
+  const targetCounty =
+    targetId !== null && typeof targetKey === "string" && titleTierFromKey(targetKey) === "county"
+      ? extractCountyContext(q, loc, targetId)
+      : null;
+
+  const result: CouncilTaskInfo = {
     id: taskId,
     type: taskType,
     ownerId,
     courtOwnerId,
     office: officeForTask(taskType),
+    targetTitleId: targetId,
+    targetTitle: targetId === null ? null : resolveTitleName(q, loc, targetId),
+    targetCounty,
   };
+
+  if (record && taskType !== null && TARGETED_TASKS.has(taskType) && targetId === null) {
+    result.diagnostics = {
+      fieldNames: Object.keys(record).slice(0, 64),
+      primitiveFields: primitiveFields(record),
+      unresolvedTarget: true,
+    };
+  }
+  return result;
 }
 
 function toCouncillor(
@@ -144,7 +235,7 @@ function toCouncillor(
     traits: character.traits,
     primaryTitle: character.primaryTitle,
     councilTaskId,
-    activeTask: knownTask ?? councilTask(q, storedTaskId),
+    activeTask: knownTask ?? councilTask(q, loc, storedTaskId),
   };
 }
 
@@ -183,7 +274,7 @@ export function extractCouncil(q: Query, loc: Localizer, candidateLimit = 30): C
   const seenMembers = new Set<number>();
 
   for (const rawId of rawCouncilIds) {
-    const task = councilTask(q, rawId);
+    const task = councilTask(q, loc, rawId);
     if (task?.ownerId !== null && task?.ownerId !== undefined) {
       taskIds.push(rawId);
       const member = toCouncillor(q, loc, task.ownerId, task);
