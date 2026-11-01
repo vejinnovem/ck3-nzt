@@ -82,7 +82,7 @@ relations={ active_relations={
       playerRole: "suzerain",
       independentSubject: true,
       levels: [7, 8],
-      classificationSource: "serialized_marker",
+      classificationSource: "independent_subject_contract",
       evidence: ["subject_contracts", "suzerain"],
     },
   ]);
