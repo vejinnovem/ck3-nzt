@@ -5,6 +5,7 @@ export class Localizer {
   private map = new Map<string, string>();
   private traitLookup: string[] | null = null;
   private warned = false;
+  private baronyProvince = new Map<string, number>();
 
   constructor(
     gameDir: string | null,
@@ -19,6 +20,10 @@ export class Localizer {
     if (preferredLanguage && preferredLanguage !== "english") {
       this.loadDir(join(gameDir, "localization", preferredLanguage));
     }
+
+    // The save stores dynamic province state, but in current CK3 saves it does not
+    // serialize a reliable province -> barony link. The static landed-title files do.
+    this.loadLandedTitles(join(gameDir, "common", "landed_titles"));
   }
 
   private loadDir(dir: string): void {
@@ -53,6 +58,95 @@ export class Localizer {
     }
   }
 
+  private loadLandedTitles(dir: string): void {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+
+    for (const name of entries) {
+      const path = join(dir, name);
+      let st;
+      try {
+        st = statSync(path);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) {
+        this.loadLandedTitles(path);
+        continue;
+      }
+      if (!name.endsWith(".txt")) continue;
+      this.loadLandedTitleFile(path);
+    }
+  }
+
+  private loadLandedTitleFile(path: string): void {
+    let text: string;
+    try {
+      text = readFileSync(path, "utf8");
+    } catch {
+      return;
+    }
+
+    // Comments can contain braces or title-like text. They are not relevant to the
+    // structural mapping, so remove them before scanning blocks.
+    text = text.replace(/#.*$/gm, "");
+    const titlePattern = /\b(b_[A-Za-z0-9_]+)\s*=\s*\{/g;
+    let match: RegExpExecArray | null;
+    while ((match = titlePattern.exec(text)) !== null) {
+      const key = match[1]!;
+      const openBrace = text.indexOf("{", match.index);
+      if (openBrace < 0) continue;
+      const closeBrace = this.findMatchingBrace(text, openBrace);
+      if (closeBrace < 0) continue;
+
+      const body = text.slice(openBrace + 1, closeBrace);
+      const provinceMatch = /\bprovince\s*=\s*(\d+)\b/.exec(body);
+      if (provinceMatch) {
+        const provinceId = Number(provinceMatch[1]);
+        if (Number.isFinite(provinceId)) this.baronyProvince.set(key, provinceId);
+      }
+
+      // Barony blocks cannot contain other landed-title blocks. Advancing to the end
+      // avoids treating script text inside a barony as another top-level match.
+      titlePattern.lastIndex = closeBrace + 1;
+    }
+  }
+
+  private findMatchingBrace(text: string, openBrace: number): number {
+    let depth = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let index = openBrace; index < text.length; index += 1) {
+      const ch = text[index]!;
+      if (quoted) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (ch === "\\") {
+          escaped = true;
+          continue;
+        }
+        if (ch === '"') quoted = false;
+        continue;
+      }
+      if (ch === '"') {
+        quoted = true;
+        continue;
+      }
+      if (ch === "{") depth += 1;
+      else if (ch === "}") {
+        depth -= 1;
+        if (depth === 0) return index;
+      }
+    }
+    return -1;
+  }
+
   /** Per-save trait index table (from the gamestate's traits_lookup). */
   setTraitLookup(lookup: string[] | null): void {
     this.traitLookup = lookup;
@@ -80,5 +174,9 @@ export class Localizer {
     const prefixed = `trait_${ident}`;
     const resolvedPrefixed = this.resolve(prefixed);
     return resolvedPrefixed !== prefixed ? resolvedPrefixed : ident;
+  }
+
+  provinceForBarony(key: string): number | null {
+    return this.baronyProvince.get(key) ?? null;
   }
 }

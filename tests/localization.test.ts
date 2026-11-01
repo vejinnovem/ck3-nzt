@@ -23,6 +23,7 @@ test("resolve() falls back to the raw key when missing", () => {
 test("a null game dir yields an empty localizer that echoes keys", () => {
   const loc = new Localizer(null);
   expect(loc.resolve("k_bohemia")).toBe("k_bohemia");
+  expect(loc.provinceForBarony("b_alpha")).toBeNull();
 });
 
 test("resolveTrait() supports direct and trait_-prefixed localization keys", () => {
@@ -31,4 +32,11 @@ test("resolveTrait() supports direct and trait_-prefixed localization keys", () 
   expect(loc.resolveTrait(0)).toBe("Sprawiedliwy");
   expect(loc.resolveTrait(1)).toBe("Diligent");
   expect(loc.resolveTrait(99)).toBe("trait_99");
+});
+
+test("provinceForBarony() reads province IDs from static landed-title files", () => {
+  const loc = new Localizer(GAME_DIR);
+  expect(loc.provinceForBarony("b_alpha")).toBe(101);
+  expect(loc.provinceForBarony("b_beta")).toBe(102);
+  expect(loc.provinceForBarony("b_missing")).toBeNull();
 });

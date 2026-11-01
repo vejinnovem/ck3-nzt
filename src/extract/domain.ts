@@ -205,7 +205,7 @@ function provinceDatabase(q: Query): {
   return { source: "unavailable", records: null };
 }
 
-function provinceIdForBarony(q: Query, titleId: number): number | null {
+function provinceIdForBarony(q: Query, titleId: number, loc: Localizer): number | null {
   const title = obj(q.at(`/landed_titles/landed_titles/${titleId}`));
 
   // Only fields whose semantics explicitly identify a province are safe direct candidates.
@@ -222,19 +222,26 @@ function provinceIdForBarony(q: Query, titleId: number): number | null {
   // Some saves expose an inverse province -> title link instead. Prefer the nested
   // province database when both the wrapper and nested object exist.
   const { records: provinces } = provinceDatabase(q);
-  if (!provinces) return null;
-  for (const [provinceIdText, rawProvince] of Object.entries(provinces)) {
-    const province = obj(rawProvince);
-    if (!province) continue;
-    const linkedTitle =
-      numberOrNull(province["title"]) ??
-      numberOrNull(province["title_id"]) ??
-      numberOrNull(province["barony"]) ??
-      numberOrNull(province["holding_title"]);
-    if (linkedTitle !== titleId) continue;
-    const provinceId = Number(provinceIdText);
-    if (Number.isFinite(provinceId)) return provinceId;
+  if (provinces) {
+    for (const [provinceIdText, rawProvince] of Object.entries(provinces)) {
+      const province = obj(rawProvince);
+      if (!province) continue;
+      const linkedTitle =
+        numberOrNull(province["title"]) ??
+        numberOrNull(province["title_id"]) ??
+        numberOrNull(province["barony"]) ??
+        numberOrNull(province["holding_title"]);
+      if (linkedTitle !== titleId) continue;
+      const provinceId = Number(provinceIdText);
+      if (Number.isFinite(provinceId)) return provinceId;
+    }
   }
+
+  // Current CK3 saves expose dynamic province state but no reliable title link.
+  // The installed game's landed-title definitions are the authoritative mapping.
+  const staticProvinceId = loc.provinceForBarony(titleKey(q, titleId));
+  if (staticProvinceId !== null && provinceRecord(q, staticProvinceId)) return staticProvinceId;
+
   return null;
 }
 
@@ -347,7 +354,7 @@ function holdingDiagnostics(q: Query, titleId: number): DomainHoldingDiagnostics
 
 function extractHolding(q: Query, loc: Localizer, titleId: number): DomainHoldingInfo {
   const key = titleKey(q, titleId);
-  const provinceId = provinceIdForBarony(q, titleId);
+  const provinceId = provinceIdForBarony(q, titleId, loc);
   const province = provinceId === null ? null : provinceRecord(q, provinceId);
   const provinceHolding = province ? obj(province["holding"]) : null;
   const provinceItselfIsHolding =
