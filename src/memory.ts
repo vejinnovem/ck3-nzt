@@ -139,6 +139,10 @@ function successionAssignmentSignature(snapshot: Snapshot): string | null {
     .join("|");
 }
 
+function importantActionCount(snapshot: Snapshot, type: string): number {
+  return snapshot.importantActions?.actions.filter((action) => action.type === type).length ?? 0;
+}
+
 function councilAssignmentSummary(snapshot: Snapshot): Record<string, Scalar> {
   const result: Record<string, Scalar> = {};
   const council = snapshot.council;
@@ -216,9 +220,15 @@ export function summarizeSnapshot(snapshot: Snapshot): Record<string, Scalar> {
     "realm.house": snapshot.overview.house,
     "economy.gold": snapshot.overview.gold,
     "economy.prestige": snapshot.overview.prestige,
+    "economy.prestigeCurrency": snapshot.ruler?.prestigeCurrency ?? null,
     "economy.piety": snapshot.overview.piety,
+    "economy.pietyCurrency": snapshot.ruler?.pietyCurrency ?? null,
     "realm.heldTitleCount": titleCount,
     "realm.heldCountyCount": countyCount,
+    "realm.countyCount": snapshot.realm?.countyCount ?? null,
+    "realm.playerHeldCountyCount": snapshot.realm?.playerHeldCountyCount ?? countyCount,
+    "realm.vassalHeldCountyCount": snapshot.realm?.vassalHeldCountyCount ?? null,
+    "realm.authority": snapshot.economy?.realmRules.authority?.key ?? null,
     "realm.heldCounties": titleSignature(snapshot.titles?.counties),
     "realm.heldDuchies": titleSignature(snapshot.titles?.duchies),
     "succession.titleAssignments": successionAssignmentSignature(snapshot),
@@ -231,6 +241,11 @@ export function summarizeSnapshot(snapshot: Snapshot): Record<string, Scalar> {
     "factions.maxPowerRatio": maxFactionPowerRatio(snapshot),
     "vassals.inFaction": snapshot.vassals.filter((vassal) => vassal.inFaction).length,
     "vassals.lowestTrackedOpinion": opinions.length > 0 ? Math.min(...opinions) : null,
+    "importantActions.canVassalize": importantActionCount(snapshot, "action_can_vassalize"),
+    "importantActions.powerfulVassalNotOnCouncil": importantActionCount(
+      snapshot,
+      "action_powerful_vassal_not_on_council",
+    ),
     ...councilAssignmentSummary(snapshot),
     ...guardianAssignmentSummary(snapshot),
     ...characterAvailabilitySummary(snapshot),

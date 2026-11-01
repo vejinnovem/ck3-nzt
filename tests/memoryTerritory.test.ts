@@ -23,6 +23,7 @@ function snapshot(
     economy: {
       heldTitleCount: counties.length * 2 + 1,
       heldCountyCount: counties.length,
+      realmRules: { authority: null },
     } as Snapshot["economy"],
     military: {
       levy: 1000,
