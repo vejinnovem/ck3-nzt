@@ -307,6 +307,39 @@ function correctArmy(
   };
 }
 
+function invalidateInconsistentSinglePlayerArmyCount(
+  q: Query,
+  playerId: number,
+  armies: OperationalArmyInfo[],
+): OperationalArmyInfo[] {
+  const playerArmies = armies.filter((army) => army.relation === "player");
+  if (playerArmies.length !== 1) return armies;
+
+  const playerArmy = playerArmies[0]!;
+  const realmCurrentStrength = num(q.at(`/living/${playerId}/landed_data/current_strength`));
+  if (playerArmy.currentSoldiers === null || realmCurrentStrength === null) return armies;
+
+  const delta = Math.abs(realmCurrentStrength - playerArmy.currentSoldiers);
+  const tolerance = Math.max(25, Math.round(realmCurrentStrength * 0.05));
+  if (delta <= tolerance) return armies;
+
+  return armies.map((army) => {
+    if (army.id !== playerArmy.id) return army;
+    const diagnostics = { ...(army.diagnostics ?? {}) };
+    diagnostics["soldierCount.regimentAggregateEstimate"] = army.currentSoldiers as number;
+    diagnostics["soldierCount.ownerCurrentStrength"] = realmCurrentStrength;
+    diagnostics["soldierCount.reliable"] = false;
+    diagnostics["soldierCount.warning"] =
+      "Single player-army regiment aggregate conflicts with ruler current_strength; do not use as exact stack size.";
+    return {
+      ...army,
+      currentSoldiers: null,
+      maxSoldiers: null,
+      diagnostics,
+    };
+  });
+}
+
 export function correctOperationalArmiesLiveFields(
   q: Query,
   loc: Localizer,
@@ -317,8 +350,9 @@ export function correctOperationalArmiesLiveFields(
   if (playerId === null) return summary;
   const provinceMap = provinceTitleMap(q);
   const warMap = warIdsByCharacter(q, playerId);
+  const correctedArmies = summary.armies.map((army) => correctArmy(q, loc, provinceMap, warMap, army));
   return {
     ...summary,
-    armies: summary.armies.map((army) => correctArmy(q, loc, provinceMap, warMap, army)),
+    armies: invalidateInconsistentSinglePlayerArmyCount(q, playerId, correctedArmies),
   };
 }
