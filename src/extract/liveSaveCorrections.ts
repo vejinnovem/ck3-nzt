@@ -192,11 +192,70 @@ function warIdsByCharacter(q: Query, playerId: number): Map<number, number[]> {
   return result;
 }
 
+function recoverStandaloneMenAtArms(
+  q: Query,
+  playerId: number,
+): MilitaryInfo["menAtArms"]["regiments"] {
+  const regiments = obj(q.at("/regiments")) ?? obj(q.at("/armies/regiments"));
+  if (!regiments) return [];
+
+  const recovered: MilitaryInfo["menAtArms"]["regiments"] = [];
+  for (const [idText, rawRegiment] of Object.entries(regiments)) {
+    const regiment = obj(rawRegiment);
+    const id = Number(idText);
+    if (!regiment || !Number.isFinite(id)) continue;
+    const type = typeof regiment["type"] === "string" ? regiment["type"] : null;
+    const ownerId = firstDirectNumber(regiment, ["owner"]);
+    const origin = firstDirectNumber(regiment, ["origin"]);
+    if (!type || ownerId !== playerId || origin === null) continue;
+
+    const size = firstDirectNumber(regiment, ["size"]);
+    const current =
+      firstDirectNumber(regiment, ["current", "current_soldiers", "soldiers", "men"]) ??
+      firstNumberForKeys(
+        regiment["chunks"],
+        new Set(["current", "current_soldiers", "soldiers", "men"]),
+      ) ??
+      size;
+    const max =
+      firstDirectNumber(regiment, ["max", "max_soldiers", "maximum"]) ??
+      firstNumberForKeys(regiment["chunks"], new Set(["max", "max_soldiers", "maximum"])) ??
+      size;
+    if (current === null && max === null) continue;
+
+    const owningTitle = firstDirectNumber(regiment, ["owning_title"]);
+    const diagnostics: Record<string, Primitive> = {};
+    collectPrimitiveHints(regiment, "standaloneRegiment", diagnostics, 0, 32);
+    recovered.push({
+      id,
+      type,
+      ownerId: playerId,
+      current,
+      max,
+      linkedRegimentIds: [id],
+      originTitleIds: [origin],
+      owningTitleIds: owningTitle === null ? [] : [owningTitle],
+      stationed: null,
+      diagnostics: Object.keys(diagnostics).length > 0 ? diagnostics : null,
+    });
+  }
+
+  recovered.sort((a, b) => a.id - b.id);
+  return recovered;
+}
+
 export function correctMilitaryLiveFields(q: Query, military: MilitaryInfo): MilitaryInfo {
   const armyRegiments = obj(q.at("/army_regiments")) ?? obj(q.at("/armies/army_regiments"));
   const regiments = obj(q.at("/regiments")) ?? obj(q.at("/armies/regiments"));
+  const playerId = num(q.at("/played_character/character"));
+  const recoveredStandalone =
+    military.menAtArms.regiments.length === 0 && playerId !== null
+      ? recoverStandaloneMenAtArms(q, playerId)
+      : [];
+  const baseRegiments =
+    military.menAtArms.regiments.length > 0 ? military.menAtArms.regiments : recoveredStandalone;
 
-  const correctedRegiments = military.menAtArms.regiments.map((regiment) => {
+  const correctedRegiments = baseRegiments.map((regiment) => {
     const rawArmyRegiment = obj(armyRegiments?.[String(regiment.id)]);
     const cached = obj(rawArmyRegiment?.["cached"]);
     let current = regiment.current ?? firstDirectNumber(cached, ["current", "current_soldiers", "soldiers"]);
@@ -206,13 +265,18 @@ export function correctMilitaryLiveFields(q: Query, military: MilitaryInfo): Mil
       const linked = obj(regiments?.[String(linkedId)]);
       if (current === null) {
         current =
-          firstDirectNumber(linked, ["current", "current_soldiers", "soldiers"]) ??
-          firstNumberForKeys(linked?.["chunks"], new Set(["current", "current_soldiers", "soldiers"]));
+          firstDirectNumber(linked, ["current", "current_soldiers", "soldiers", "men"]) ??
+          firstNumberForKeys(
+            linked?.["chunks"],
+            new Set(["current", "current_soldiers", "soldiers", "men"]),
+          ) ??
+          firstDirectNumber(linked, ["size"]);
       }
       if (max === null) {
         max =
           firstDirectNumber(linked, ["max", "max_soldiers", "maximum"]) ??
-          firstNumberForKeys(linked?.["chunks"], new Set(["max", "max_soldiers", "maximum"]));
+          firstNumberForKeys(linked?.["chunks"], new Set(["max", "max_soldiers", "maximum"])) ??
+          firstDirectNumber(linked, ["size"]);
       }
     }
 
@@ -236,9 +300,14 @@ export function correctMilitaryLiveFields(q: Query, military: MilitaryInfo): Mil
     ...military,
     menAtArms: {
       ...military.menAtArms,
+      slotsUsed: correctedRegiments.length,
       regiments: correctedRegiments,
       totalCurrentSoldiers,
       totalMaxSoldiers,
+      source:
+        correctedRegiments.length > 0
+          ? "global_armies_best_effort"
+          : military.menAtArms.source,
     },
     unattributedCurrentStrength,
   };

@@ -127,19 +127,29 @@ export function extractVassals(
 
   // 2. Fallback for governments/situations where a direct vassal does not have a
   // serialized vassal_contract entry (observed after granting a tribal county).
-  // A title held by someone else whose de-facto liege is one of the player's held
-  // titles identifies that holder as a direct vassal. Deduplicate by character.
-  const playerDomain = new Set(numberList(q.at(`/living/${playerId}/landed_data/domain`)));
+  // de_facto_liege can point at an upper-tier title (for example the ruler's duchy),
+  // which is not necessarily present in landed_data.domain. Build the complete set of
+  // titles actually held by the player and match against that instead.
   const landedTitles = obj(q.at("/landed_titles/landed_titles"));
-  if (playerDomain.size > 0 && landedTitles) {
-    for (const rawTitle of Object.values(landedTitles)) {
+  if (landedTitles) {
+    const playerHeldTitles = new Set(numberList(q.at(`/living/${playerId}/landed_data/domain`)));
+    for (const [titleIdText, rawTitle] of Object.entries(landedTitles)) {
       const title = obj(rawTitle);
-      if (!title) continue;
-      const holder = num(title["holder"]);
-      const deFactoLiege = num(title["de_facto_liege"]);
-      if (holder === null || deFactoLiege === null) continue;
-      if (!playerDomain.has(deFactoLiege)) continue;
-      addVassal(holder);
+      const titleId = Number(titleIdText);
+      if (!title || !Number.isFinite(titleId)) continue;
+      if (num(title["holder"]) === playerId) playerHeldTitles.add(titleId);
+    }
+
+    if (playerHeldTitles.size > 0) {
+      for (const rawTitle of Object.values(landedTitles)) {
+        const title = obj(rawTitle);
+        if (!title) continue;
+        const holder = num(title["holder"]);
+        const deFactoLiege = num(title["de_facto_liege"]);
+        if (holder === null || deFactoLiege === null) continue;
+        if (!playerHeldTitles.has(deFactoLiege)) continue;
+        addVassal(holder);
+      }
     }
   }
 

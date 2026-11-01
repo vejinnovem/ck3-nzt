@@ -33,7 +33,7 @@ test("extracts vassals and factions with cross-referenced flags", async () => {
   expect(snap.vassalCount).toBe(1);
 });
 
-test("detects a direct vassal from de-facto title links when no contract is serialized", async () => {
+test("detects a direct vassal when de-facto liege is a held duchy outside personal domain", async () => {
   const gamestate = Buffer.from(`
 played_character={ character=10 }
 landed_titles={
@@ -44,7 +44,7 @@ landed_titles={
  }
 }
 living={
- 10={ first_name="Ruler" landed_data={ domain={ 1 2 } council={} } }
+ 10={ first_name="Ruler" landed_data={ domain={ 2 } council={} } }
  20={ first_name="Child" landed_data={ strength_for_liege=123 } }
 }
 `);
