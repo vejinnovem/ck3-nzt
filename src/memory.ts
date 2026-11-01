@@ -139,6 +139,65 @@ function successionAssignmentSignature(snapshot: Snapshot): string | null {
     .join("|");
 }
 
+function councilAssignmentSummary(snapshot: Snapshot): Record<string, Scalar> {
+  const result: Record<string, Scalar> = {};
+  const council = snapshot.council;
+  if (!council) return result;
+
+  const names = new Map(council.members.map((member) => [member.id, member.name]));
+  for (const office of council.offices) {
+    result[`council.office.${office.office}`] =
+      office.vacant || office.memberId === null
+        ? null
+        : `${office.memberId}:${names.get(office.memberId) ?? office.memberId}`;
+  }
+  return result;
+}
+
+function guardianAssignmentSummary(snapshot: Snapshot): Record<string, Scalar> {
+  const result: Record<string, Scalar> = {};
+  for (const child of snapshot.education?.children ?? []) {
+    const guardians = child.guardianIds
+      .map((id, index) => ({ id, name: child.guardianNames[index] ?? String(id) }))
+      .sort((a, b) => a.id - b.id);
+    result[`education.guardians.${child.id}`] =
+      guardians.length === 0
+        ? null
+        : guardians.map((guardian) => `${guardian.id}:${guardian.name}`).join("|");
+  }
+  return result;
+}
+
+function characterAvailabilitySummary(snapshot: Snapshot): Record<string, Scalar> {
+  const result: Record<string, Scalar> = {};
+  const council = snapshot.council;
+  if (!council) return result;
+
+  const people = [...council.members, ...council.candidates];
+  const seen = new Set<number>();
+  for (const person of people) {
+    if (seen.has(person.id) || !person.availability) continue;
+    seen.add(person.id);
+    const availability = person.availability;
+    const plans = [...availability.travelPlanIds].sort().join(",");
+    const roles = [...availability.travelRoles].sort().join(",");
+    result[`characters.availability.${person.id}`] = [
+      person.name,
+      availability.presenceStatus,
+      availability.councilAvailability,
+      `travel=${availability.travelling}`,
+      `plans=${plans}`,
+      `roles=${roles}`,
+      `army=${availability.armyId ?? ""}`,
+      `employer=${availability.employerId ?? ""}`,
+      `host=${availability.hostId ?? ""}`,
+      `leaving=${availability.wantsToLeaveCourt}`,
+      `leaveDate=${availability.leaveCourtDate ?? ""}`,
+    ].join("|");
+  }
+  return result;
+}
+
 export function summarizeSnapshot(snapshot: Snapshot): Record<string, Scalar> {
   const opinions = snapshot.vassals
     .map((vassal) => vassal.opinion)
@@ -172,6 +231,9 @@ export function summarizeSnapshot(snapshot: Snapshot): Record<string, Scalar> {
     "factions.maxPowerRatio": maxFactionPowerRatio(snapshot),
     "vassals.inFaction": snapshot.vassals.filter((vassal) => vassal.inFaction).length,
     "vassals.lowestTrackedOpinion": opinions.length > 0 ? Math.min(...opinions) : null,
+    ...councilAssignmentSummary(snapshot),
+    ...guardianAssignmentSummary(snapshot),
+    ...characterAvailabilitySummary(snapshot),
   };
 }
 
@@ -188,9 +250,11 @@ export function buildChanges(previous: Snapshot | null, current: Snapshot): Chan
   const before = summarizeSnapshot(previous);
   const after = summarizeSnapshot(current);
   const changes: StrategicChange[] = [];
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
 
-  for (const [key, value] of Object.entries(after)) {
-    const oldValue = before[key] ?? null;
+  for (const key of keys) {
+    const oldValue = Object.hasOwn(before, key) ? (before[key] ?? null) : null;
+    const value = Object.hasOwn(after, key) ? (after[key] ?? null) : null;
     if (Object.is(oldValue, value)) continue;
 
     const change: StrategicChange = { key, before: oldValue, after: value };
