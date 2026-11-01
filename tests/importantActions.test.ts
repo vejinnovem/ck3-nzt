@@ -5,7 +5,10 @@ import { extractImportantActions } from "../src/extract/importantActions.js";
 
 const GS = Buffer.from(`
 played_character={ character=10 }
-landed_titles={ landed_titles={ 100={ key="c_test" name="Test County" holder=20 } } }
+landed_titles={ landed_titles={
+ 20={ key="c_collision" name="Collision County" holder=30 }
+ 100={ key="c_test" name="Test County" holder=20 }
+} }
 dynasties={ dynasty_house={ 200={ name="TestHouse" } } }
 living={
  10={ first_name="Player" }
@@ -20,13 +23,24 @@ important_action_manager={ active={
    priority=100
   }
  501={ action_type="action_educate_child" actor=10 recipient=30 priority=50 }
+ 502={
+   important_action_type="action_can_vassalize"
+   character=10
+   scope={
+    root={ type="char" identity=10 }
+    event_targets={
+     actor={ type="char" identity=10 }
+     recipient={ type="char" identity=20 }
+    }
+   }
+  }
 }}
 `);
 
 test("extractImportantActions resolves nested UI advisory scope targets", async () => {
   const info = await queryGamestate(GS, (q) => extractImportantActions(q, new Localizer(null)));
-  expect(info.activeCount).toBe(2);
-  expect(info.playerReferencedCount).toBe(2);
+  expect(info.activeCount).toBe(3);
+  expect(info.playerReferencedCount).toBe(3);
   expect(info.actions[0]).toMatchObject({
     id: 500,
     type: "action_powerful_vassal_council",
@@ -74,5 +88,28 @@ test("extractImportantActions resolves nested UI advisory scope targets", async 
     targetCharacterRefs: [],
     targetTitleRefs: [],
     scopePrimitiveFields: {},
+  });
+  expect(info.actions[2]).toMatchObject({
+    id: 502,
+    type: "action_can_vassalize",
+    targetCharacterRefs: [
+      {
+        field: "scope.event_targets.recipient.identity",
+        id: 20,
+        name: "Maciej",
+        dynastyHouseId: 200,
+        dynastyHouseName: "TestHouse",
+        primaryTitle: "Test County",
+      },
+    ],
+    targetTitleRefs: [],
+    scopePrimitiveFields: {
+      "scope.root.type": "char",
+      "scope.root.identity": 10,
+      "scope.event_targets.actor.type": "char",
+      "scope.event_targets.actor.identity": 10,
+      "scope.event_targets.recipient.type": "char",
+      "scope.event_targets.recipient.identity": 20,
+    },
   });
 });
