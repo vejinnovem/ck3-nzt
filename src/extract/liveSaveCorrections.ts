@@ -192,22 +192,66 @@ function warIdsByCharacter(q: Query, playerId: number): Map<number, number[]> {
   return result;
 }
 
+function playerHeldTitlesAndOriginProvinces(
+  q: Query,
+  playerId: number,
+  loc: Localizer | undefined,
+): { heldTitleIds: Set<number>; originProvinceIds: Set<number> } {
+  const heldTitleIds = new Set(numberArray(q.at(`/living/${playerId}/landed_data/domain`)));
+  const originProvinceIds = new Set<number>();
+  const landedTitles = obj(q.at("/landed_titles/landed_titles"));
+
+  if (landedTitles) {
+    for (const [idText, rawTitle] of Object.entries(landedTitles)) {
+      const title = obj(rawTitle);
+      const id = Number(idText);
+      if (!title || !Number.isFinite(id)) continue;
+      if (firstDirectNumber(title, ["holder"]) === playerId) heldTitleIds.add(id);
+    }
+
+    if (loc) {
+      for (const titleId of heldTitleIds) {
+        const title = obj(landedTitles[String(titleId)]);
+        const key = typeof title?.["key"] === "string" ? (title["key"] as string) : null;
+        if (!key?.startsWith("b_")) continue;
+        const provinceId = loc.provinceForBarony(key);
+        if (provinceId !== null) originProvinceIds.add(provinceId);
+      }
+    }
+  }
+
+  return { heldTitleIds, originProvinceIds };
+}
+
 function recoverStandaloneMenAtArms(
   q: Query,
   playerId: number,
+  loc?: Localizer,
 ): MilitaryInfo["menAtArms"]["regiments"] {
   const regiments = obj(q.at("/regiments")) ?? obj(q.at("/armies/regiments"));
   if (!regiments) return [];
 
+  const { heldTitleIds, originProvinceIds } = playerHeldTitlesAndOriginProvinces(q, playerId, loc);
   const recovered: MilitaryInfo["menAtArms"]["regiments"] = [];
   for (const [idText, rawRegiment] of Object.entries(regiments)) {
     const regiment = obj(rawRegiment);
     const id = Number(idText);
     if (!regiment || !Number.isFinite(id)) continue;
     const type = typeof regiment["type"] === "string" ? regiment["type"] : null;
-    const ownerId = firstDirectNumber(regiment, ["owner"]);
-    const origin = firstDirectNumber(regiment, ["origin"]);
-    if (!type || ownerId !== playerId || origin === null) continue;
+    const ownerId =
+      firstDirectNumber(regiment, ["owner", "owner_character"]) ??
+      firstNumberForKeys(regiment, new Set(["owner_character"]));
+    const origin =
+      firstDirectNumber(regiment, ["origin"]) ??
+      firstNumberForKeys(regiment, new Set(["origin"]));
+    const owningTitle =
+      firstDirectNumber(regiment, ["owning_title"]) ??
+      firstNumberForKeys(regiment, new Set(["owning_title"]));
+    const ownedByPlayer =
+      ownerId === playerId ||
+      (owningTitle !== null && heldTitleIds.has(owningTitle)) ||
+      (origin !== null && originProvinceIds.has(origin));
+    if (!type || !ownedByPlayer) continue;
 
     const size = firstDirectNumber(regiment, ["size"]);
     const current =
@@ -223,9 +267,14 @@ function recoverStandaloneMenAtArms(
       size;
     if (current === null && max === null) continue;
 
-    const owningTitle = firstDirectNumber(regiment, ["owning_title"]);
     const diagnostics: Record<string, Primitive> = {};
     collectPrimitiveHints(regiment, "standaloneRegiment", diagnostics, 0, 32);
+    if (ownerId !== playerId && origin !== null && originProvinceIds.has(origin)) {
+      diagnostics["standaloneRegiment.ownerInferredFromDomainOrigin"] = true;
+    }
+    if (ownerId !== playerId && owningTitle !== null && heldTitleIds.has(owningTitle)) {
+      diagnostics["standaloneRegiment.ownerInferredFromHeldTitle"] = true;
+    }
     recovered.push({
       id,
       type,
@@ -233,7 +282,7 @@ function recoverStandaloneMenAtArms(
       current,
       max,
       linkedRegimentIds: [id],
-      originTitleIds: [origin],
+      originTitleIds: origin === null ? [] : [origin],
       owningTitleIds: owningTitle === null ? [] : [owningTitle],
       stationed: null,
       diagnostics: Object.keys(diagnostics).length > 0 ? diagnostics : null,
@@ -244,13 +293,17 @@ function recoverStandaloneMenAtArms(
   return recovered;
 }
 
-export function correctMilitaryLiveFields(q: Query, military: MilitaryInfo): MilitaryInfo {
+export function correctMilitaryLiveFields(
+  q: Query,
+  military: MilitaryInfo,
+  loc?: Localizer,
+): MilitaryInfo {
   const armyRegiments = obj(q.at("/army_regiments")) ?? obj(q.at("/armies/army_regiments"));
   const regiments = obj(q.at("/regiments")) ?? obj(q.at("/armies/regiments"));
   const playerId = num(q.at("/played_character/character"));
   const recoveredStandalone =
     military.menAtArms.regiments.length === 0 && playerId !== null
-      ? recoverStandaloneMenAtArms(q, playerId)
+      ? recoverStandaloneMenAtArms(q, playerId, loc)
       : [];
   const baseRegiments =
     military.menAtArms.regiments.length > 0 ? military.menAtArms.regiments : recoveredStandalone;
