@@ -171,7 +171,7 @@ function targetTitleId(q: Query, task: Obj): number | null {
     const candidate = referenceNumber(task[field], ["title", "landed_title", "county", "id", "value"]);
     if (candidate === null) continue;
     const key = q.at(`/landed_titles/landed_titles/${candidate}/key`);
-    if (typeof key === "string" && titleTierFromKey(key) !== "unknown") return candidate;
+    if (typeof key === "string" && titleTierFromKey(key) !== "other") return candidate;
   }
   return null;
 }
@@ -265,9 +265,6 @@ export function extractCouncil(q: Query, loc: Localizer, candidateLimit = 30): C
     };
   }
 
-  // In current CK3 saves landed_data/council contains council-task IDs, not
-  // character IDs. Older fixtures/saves can expose character IDs directly, so
-  // retain a fallback for that representation.
   const rawCouncilIds = numberList(q.at(`/living/${playerId}/landed_data/council`));
   const taskIds: number[] = [];
   const members: CouncillorInfo[] = [];
@@ -285,7 +282,6 @@ export function extractCouncil(q: Query, loc: Localizer, candidateLimit = 30): C
       continue;
     }
 
-    // Compatibility fallback: raw value itself is a character ID.
     const member = toCouncillor(q, loc, rawId);
     if (member && !seenMembers.has(member.id)) {
       seenMembers.add(member.id);
