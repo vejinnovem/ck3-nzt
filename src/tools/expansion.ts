@@ -6,6 +6,17 @@ function formatStrength(value: number | null): string {
   return value === null ? "?" : String(Math.round(value));
 }
 
+function formatCandidate(
+  candidate: {
+    type: string;
+    availability: "candidate" | "blocked";
+    blockers: string[];
+  },
+): string {
+  const blockers = candidate.blockers.length === 0 ? "" : `; blockers ${candidate.blockers.join(",")}`;
+  return `${candidate.type}:${candidate.availability}${blockers}`;
+}
+
 export function registerExpansionTool(server: McpServer, cache: SnapshotCache) {
   server.registerTool(
     "expansion",
@@ -15,7 +26,8 @@ export function registerExpansionTool(server: McpServer, cache: SnapshotCache) {
         "Stored expansion levers: your title claims, de jure opportunities, ongoing-war targets, " +
         "and save-derived strategic targets inside your de-jure kingdom. Strategic targets distinguish " +
         "direct alliances from CK3 confederation co-members and estimate the defensive coalition from both. " +
-        "Exact map adjacency and the full dynamic CK3 casus-belli calculation are not inferred from save data alone.",
+        "Confirmed claim/de-jure CBs are kept separate from partially evaluated tribal conquest/subjugation candidates. " +
+        "Exact map adjacency and the full dynamic CK3 casus-belli script calculation are not reconstructed yet.",
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -83,13 +95,21 @@ export function registerExpansionTool(server: McpServer, cache: SnapshotCache) {
               target.wars.length === 0
                 ? "none"
                 : target.wars.map((war) => `${war.side}:${war.cbType}`).join(", ");
+            const realmCandidates =
+              target.candidateCasusBelli.length === 0
+                ? "none"
+                : target.candidateCasusBelli.map(formatCandidate).join(", ");
             const titles = target.relevantTitles
               .map((title) => {
-                const cb =
+                const confirmed =
                   title.confirmedCasusBelli.length === 0
                     ? "no confirmed save-only CB"
-                    : `CB ${title.confirmedCasusBelli.join("+")}`;
-                return `${title.title} [${cb}]`;
+                    : `confirmed ${title.confirmedCasusBelli.join("+")}`;
+                const candidates =
+                  title.candidateCasusBelli.length === 0
+                    ? "no partial candidates"
+                    : `candidates ${title.candidateCasusBelli.map(formatCandidate).join(",")}`;
+                return `${title.title} [${confirmed}; ${candidates}]`;
               })
               .join("; ");
             body +=
@@ -99,6 +119,7 @@ export function registerExpansionTool(server: McpServer, cache: SnapshotCache) {
               `our coalition ${formatStrength(target.playerWithAlliesCurrentStrength)}; ` +
               `coalition ratio ${coalitionRatio}; ruler-only ratio ${rulerOnlyRatio}; ` +
               `direct allies ${allies}; confederation defenders ${confederationMembers}; ` +
+              `truce ${target.truceUntil ?? "none"}; realm CB candidates ${realmCandidates}; ` +
               `wars ${wars}; titles: ${titles}\n`;
           }
           body += targetNote;
@@ -108,6 +129,12 @@ export function registerExpansionTool(server: McpServer, cache: SnapshotCache) {
           `\nScope: ${e.targetScope.deJureKingdomName ?? "unknown de-jure kingdom"}; ` +
           `exact adjacency: ${e.targetScope.exactAdjacencyAvailable ? "available" : "not available"}; ` +
           `CB coverage: ${e.targetScope.casusBelliCoverage}.\n`;
+        if (e.targetScope.casusBelliLimitations.length > 0) {
+          body += "CB limitations:\n";
+          for (const limitation of e.targetScope.casusBelliLimitations) {
+            body += `- ${limitation}\n`;
+          }
+        }
 
         return { content: [{ type: "text", text: stamp(snap, body) }] };
       } catch (err) {

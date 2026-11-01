@@ -1,5 +1,6 @@
 import type { Query } from "../parser.js";
 import type { Localizer } from "../localization.js";
+import { formatCk3Date } from "../format.js";
 import type { War } from "./military.js";
 import { collectConfederationCoMemberIds } from "./confederations.js";
 import { forEachRelation, forEachWar } from "./scan.js";
@@ -10,11 +11,24 @@ export interface ClaimRef {
   pressed: boolean;
 }
 
+export interface StrategicCasusBelliCandidate {
+  type: string;
+  scope: "title" | "realm";
+  availability: "candidate" | "blocked";
+  targetTitleId: number | null;
+  targetTitle: string | null;
+  blockers: string[];
+  evidence: string[];
+  limitations: string[];
+}
+
 export interface StrategicTargetTitle {
   id: number;
   title: string;
   tier: TitleTier;
   confirmedCasusBelli: string[];
+  /** Partially evaluated CK3 CBs. These are deliberately separate from confirmedCasusBelli. */
+  candidateCasusBelli: StrategicCasusBelliCandidate[];
 }
 
 export interface StrategicTargetAlly {
@@ -57,6 +71,10 @@ export interface StrategicExpansionTarget {
   playerToDefensiveStrengthRatio: number | null;
   wars: StrategicTargetWar[];
   relevantTitles: StrategicTargetTitle[];
+  /** Realm-scoped CBs such as tribal subjugation, evaluated conservatively. */
+  candidateCasusBelli: StrategicCasusBelliCandidate[];
+  /** A serialized truce blocks declaration but does not erase the underlying CB from CK3's UI. */
+  truceUntil: string | null;
   basis: "same_de_jure_kingdom";
 }
 
@@ -75,14 +93,26 @@ export interface ExpansionInfo {
     deJureKingdomId: number | null;
     deJureKingdomName: string | null;
     exactAdjacencyAvailable: boolean;
-    casusBelliCoverage: "claims_and_direct_de_jure_only";
+    casusBelliCoverage: "claims_direct_de_jure_and_partial_tribal_rules";
+    casusBelliLimitations: string[];
   };
 }
+
+const CB_LIMITATIONS = [
+  "Tribal conquest candidates do not yet evaluate CK3's neighbor_land/static-map requirement or every scripted culture, faith, struggle and government trigger.",
+  "Tribal subjugation candidates evaluate tribal governments, defender independence, truces and a best-effort lifetime-use flag; prestige-level and special scripted exclusions remain unresolved.",
+];
 
 function numberList(value: unknown): number[] {
   if (typeof value === "number") return [value];
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is number => typeof item === "number");
+}
+
+function stringList(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
 }
 
 function charName(q: Query, id: number): string {
@@ -137,6 +167,53 @@ function realmNameForCharacter(q: Query, loc: Localizer, characterId: number): s
 function currentStrengthForCharacter(q: Query, characterId: number): number | null {
   const value = q.at(`/living/${characterId}/landed_data/current_strength`);
   return typeof value === "number" ? value : null;
+}
+
+function governmentKeyForCharacter(q: Query, characterId: number): string | null {
+  const landed = `/living/${characterId}/landed_data`;
+  for (const value of [
+    q.at(`${landed}/government`),
+    q.at(`/living/${characterId}/government`),
+    q.at(`/living/${characterId}/alive_data/government`),
+  ]) {
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+
+  const laws = stringList(q.at(`${landed}/laws`));
+  if (laws.some((law) => law.startsWith("tribal_authority_"))) return "tribal_government";
+  return null;
+}
+
+function isIndependentRuler(q: Query, characterId: number): boolean {
+  const domain = numberList(q.at(`/living/${characterId}/landed_data/domain`));
+  const primaryTitleId = domain[0];
+  if (primaryTitleId === undefined) return false;
+  const liege = q.at(`/landed_titles/landed_titles/${primaryTitleId}/de_facto_liege`);
+  return typeof liege !== "number";
+}
+
+function containsToken(value: unknown, token: string, depth = 0): boolean {
+  if (depth > 8 || value === null || value === undefined) return false;
+  if (typeof value === "string") return value === token;
+  if (Array.isArray(value)) return value.some((item) => containsToken(item, token, depth + 1));
+  if (typeof value !== "object") return false;
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (key === token || containsToken(child, token, depth + 1)) return true;
+  }
+  return false;
+}
+
+function truceUntilBetween(q: Query, playerId: number, otherId: number): string | null {
+  let result: string | null = null;
+  forEachRelation(q, playerId, (relationOtherId, entry) => {
+    if (relationOtherId !== otherId || result !== null) return;
+    const slot =
+      (entry["truce_0"] as Record<string, unknown> | undefined) ??
+      (entry["truce_1"] as Record<string, unknown> | undefined);
+    if (!slot || typeof slot !== "object" || slot["date"] === undefined) return;
+    result = formatCk3Date(slot["date"]);
+  });
+  return result;
 }
 
 function collectAllies(q: Query, loc: Localizer, rulerId: number): StrategicTargetAlly[] {
@@ -229,6 +306,86 @@ function confirmedCbTypes(
   return out;
 }
 
+function countyConquestCandidate(
+  q: Query,
+  playerId: number,
+  rulerId: number,
+  titleId: number,
+  title: string,
+  truceUntil: string | null,
+): StrategicCasusBelliCandidate[] {
+  if (governmentKeyForCharacter(q, playerId) !== "tribal_government") return [];
+  if (rulerId === playerId) return [];
+
+  const blockers = truceUntil ? [`truce_until:${truceUntil}`] : [];
+  return [
+    {
+      type: "county_conquest",
+      scope: "title",
+      availability: blockers.length > 0 ? "blocked" : "candidate",
+      targetTitleId: titleId,
+      targetTitle: title,
+      blockers,
+      evidence: ["attacker_government=tribal_government", "foreign_county"],
+      limitations: [
+        "Exact neighbor_land/static-map eligibility and remaining scripted CK3 triggers are not evaluated yet.",
+      ],
+    },
+  ];
+}
+
+function subjugationCandidate(
+  q: Query,
+  playerId: number,
+  rulerId: number,
+  truceUntil: string | null,
+): StrategicCasusBelliCandidate[] {
+  if (governmentKeyForCharacter(q, playerId) !== "tribal_government") return [];
+  if (governmentKeyForCharacter(q, rulerId) !== "tribal_government") return [];
+  if (!isIndependentRuler(q, rulerId)) return [];
+
+  const blockers: string[] = [];
+  if (truceUntil) blockers.push(`truce_until:${truceUntil}`);
+  const playerRecord = q.at(`/living/${playerId}`);
+  if (containsToken(playerRecord, "used_lifetime_subjugation")) {
+    blockers.push("used_lifetime_subjugation");
+  }
+
+  return [
+    {
+      type: "tribal_subjugation",
+      scope: "realm",
+      availability: blockers.length > 0 ? "blocked" : "candidate",
+      targetTitleId: null,
+      targetTitle: null,
+      blockers,
+      evidence: [
+        "attacker_government=tribal_government",
+        "defender_government=tribal_government",
+        "defender_independent=true",
+      ],
+      limitations: [
+        "Neighbor-realm, prestige-level, culture/faith modifiers and special scripted exclusions are not fully evaluated yet.",
+        "Lifetime-use detection is best-effort because CK3 can serialize flags differently between versions.",
+      ],
+    },
+  ];
+}
+
+function emptyTargetScope(
+  q: Query,
+  loc: Localizer,
+  kingdomId: number | null,
+): ExpansionInfo["targetScope"] {
+  return {
+    deJureKingdomId: kingdomId,
+    deJureKingdomName: kingdomId === null ? null : resolveTitleName(q, loc, kingdomId),
+    exactAdjacencyAvailable: false,
+    casusBelliCoverage: "claims_direct_de_jure_and_partial_tribal_rules",
+    casusBelliLimitations: [...CB_LIMITATIONS],
+  };
+}
+
 function extractStrategicTargets(
   q: Query,
   loc: Localizer,
@@ -238,12 +395,7 @@ function extractStrategicTargets(
   if (primaryTitleId === undefined) {
     return {
       strategicTargets: [],
-      targetScope: {
-        deJureKingdomId: null,
-        deJureKingdomName: null,
-        exactAdjacencyAvailable: false,
-        casusBelliCoverage: "claims_and_direct_de_jure_only",
-      },
+      targetScope: emptyTargetScope(q, loc, null),
     };
   }
 
@@ -251,12 +403,7 @@ function extractStrategicTargets(
   if (kingdomId === null) {
     return {
       strategicTargets: [],
-      targetScope: {
-        deJureKingdomId: null,
-        deJureKingdomName: null,
-        exactAdjacencyAvailable: false,
-        casusBelliCoverage: "claims_and_direct_de_jure_only",
-      },
+      targetScope: emptyTargetScope(q, loc, null),
     };
   }
 
@@ -280,12 +427,7 @@ function extractStrategicTargets(
   if (!titles) {
     return {
       strategicTargets: [],
-      targetScope: {
-        deJureKingdomId: kingdomId,
-        deJureKingdomName: resolveTitleName(q, loc, kingdomId),
-        exactAdjacencyAvailable: false,
-        casusBelliCoverage: "claims_and_direct_de_jure_only",
-      },
+      targetScope: emptyTargetScope(q, loc, kingdomId),
     };
   }
 
@@ -345,6 +487,7 @@ function extractStrategicTargets(
         defensiveCurrentStrength > 0
           ? playerWithAlliesCurrentStrength / defensiveCurrentStrength
           : null;
+      const truceUntil = truceUntilBetween(q, playerId, rulerId);
       target = {
         realmTitleId: realmTitle?.id ?? topTitleId,
         realmName: realmTitle?.name ?? resolveTitleName(q, loc, topTitleId),
@@ -361,16 +504,27 @@ function extractStrategicTargets(
         playerToDefensiveStrengthRatio,
         wars: collectWars(q, loc, rulerId),
         relevantTitles: [],
+        candidateCasusBelli: subjugationCandidate(q, playerId, rulerId, truceUntil),
+        truceUntil,
         basis: "same_de_jure_kingdom",
       };
       grouped.set(topTitleId, target);
     }
 
+    const titleName = resolveTitleName(q, loc, id);
     target.relevantTitles.push({
       id,
-      title: resolveTitleName(q, loc, id),
+      title: titleName,
       tier: "county",
       confirmedCasusBelli: confirmedCbTypes(id, q, playerClaims, playerHeldTitles),
+      candidateCasusBelli: countyConquestCandidate(
+        q,
+        playerId,
+        rulerId,
+        id,
+        titleName,
+        target.truceUntil,
+      ),
     });
   }
 
@@ -385,12 +539,7 @@ function extractStrategicTargets(
 
   return {
     strategicTargets,
-    targetScope: {
-      deJureKingdomId: kingdomId,
-      deJureKingdomName: resolveTitleName(q, loc, kingdomId),
-      exactAdjacencyAvailable: false,
-      casusBelliCoverage: "claims_and_direct_de_jure_only",
-    },
+    targetScope: emptyTargetScope(q, loc, kingdomId),
   };
 }
 
