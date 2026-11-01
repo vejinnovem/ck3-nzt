@@ -4,12 +4,30 @@ import { formatCk3Date } from "../format.js";
 import { resolveTitleName } from "./titleUtils.js";
 import { forEachWar } from "./scan.js";
 
+export interface WarScoreEvent {
+  /** Province where CK3 recorded a resolved battle/siege result. */
+  provinceId: number | null;
+  /** War-score contribution stored on the result record. */
+  warScore: number | null;
+  attackerWon: boolean | null;
+  attackerInitiated: boolean | null;
+}
+
 export interface War {
   playerSide: "attacker" | "defender";
   cbType: string;
   targetTitle: string | null;
-  attackerScore: number;
-  defenderScore: number;
+  /**
+   * CK3's ticking_war_score is only the ticking objective-control component. It is NOT
+   * the full player-visible war score, so keep the name explicit and nullable.
+   */
+  attackerTickingWarScore: number | null;
+  defenderTickingWarScore: number | null;
+  /** controls_all is only present/true when that side controls every war objective. */
+  attackerControlsAllObjectives: boolean;
+  defenderControlsAllObjectives: boolean;
+  /** Resolved battle/siege records stored by CK3 for this war. */
+  warScoreEvents: WarScoreEvent[];
   startDate: string;
 }
 
@@ -95,9 +113,10 @@ export interface RaidSummary {
 }
 
 export interface MilitaryInfo {
-  /** Raw values stored in living/<ruler>/landed_data. */
+  /** Raw realm-level mobilisation values stored in living/<ruler>/landed_data. */
   levy: number | null;
   strength: number | null;
+  /** Realm mobilisation aggregate; NOT the soldier count of any particular raised stack. */
   currentStrength: number | null;
   strengthWithoutHires: number | null;
   power: number | null;
@@ -109,6 +128,8 @@ export interface MilitaryInfo {
    */
   effectiveStrength: number | null;
   strengthSource: "landed_data_raw";
+  /** Prevent consumers from treating landed_data current_strength as an army-stack count. */
+  strengthScope: "realm_mobilisation_aggregate_not_stack_size";
   champions: ChampionSummary;
   menAtArms: MenAtArmsSummary;
   rallyPoints: RallyPointSummary;
@@ -125,6 +146,10 @@ type Obj = Record<string, unknown>;
 
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function bool(v: unknown): boolean | null {
+  return typeof v === "boolean" ? v : null;
 }
 
 function obj(v: unknown): Obj | null {
@@ -476,6 +501,23 @@ function extractRaids(q: Query, playerId: number): RaidSummary {
   };
 }
 
+function extractWarScoreEvents(war: Obj): WarScoreEvent[] {
+  const rawResults = war["battle_results"];
+  if (!Array.isArray(rawResults)) return [];
+  return rawResults.flatMap((rawResult): WarScoreEvent[] => {
+    const result = obj(rawResult);
+    if (!result) return [];
+    return [
+      {
+        provinceId: num(result["province"]),
+        warScore: num(result["war_score"]),
+        attackerWon: bool(result["attacker_won"]),
+        attackerInitiated: bool(result["attacker_initiated"]),
+      },
+    ];
+  });
+}
+
 export function extractMilitary(q: Query, loc: Localizer): MilitaryInfo {
   const playerId = q.at("/played_character/character") as number;
   const landedData = `/living/${playerId}/landed_data`;
@@ -512,22 +554,35 @@ export function extractMilitary(q: Query, loc: Localizer): MilitaryInfo {
   const wars: War[] = [];
 
   forEachWar(q, playerId, (playerSide, war) => {
-    const attackerData = war["attacker"] as Record<string, unknown> | undefined;
-    const defenderData = war["defender"] as Record<string, unknown> | undefined;
+    const attackerData = obj(war["attacker"]);
+    const defenderData = obj(war["defender"]);
 
-    const cb = war["casus_belli"] as Record<string, unknown> | undefined;
+    const cb = obj(war["casus_belli"]);
     const cbType = typeof cb?.["type"] === "string" ? (cb["type"] as string) : "";
 
     const targetedTitles = (cb?.["targeted_titles"] as number[] | undefined) ?? [];
     const firstTitleId = targetedTitles[0];
     const targetTitle = firstTitleId !== undefined ? resolveTitleName(q, loc, firstTitleId) : null;
 
-    const attackerScore = num(attackerData?.["ticking_war_score"]) ?? 0;
-    const defenderScore = num(defenderData?.["ticking_war_score"]) ?? 0;
+    const attackerTickingWarScore = num(attackerData?.["ticking_war_score"]);
+    const defenderTickingWarScore = num(defenderData?.["ticking_war_score"]);
+    const attackerControlsAllObjectives = bool(attackerData?.["controls_all"]) ?? false;
+    const defenderControlsAllObjectives = bool(defenderData?.["controls_all"]) ?? false;
+    const warScoreEvents = extractWarScoreEvents(war);
 
     const startDate = formatCk3Date(war["start_date"]);
 
-    wars.push({ playerSide, cbType, targetTitle, attackerScore, defenderScore, startDate });
+    wars.push({
+      playerSide,
+      cbType,
+      targetTitle,
+      attackerTickingWarScore,
+      defenderTickingWarScore,
+      attackerControlsAllObjectives,
+      defenderControlsAllObjectives,
+      warScoreEvents,
+      startDate,
+    });
   });
 
   return {
@@ -539,6 +594,7 @@ export function extractMilitary(q: Query, loc: Localizer): MilitaryInfo {
     maxPower,
     effectiveStrength: null,
     strengthSource: "landed_data_raw",
+    strengthScope: "realm_mobilisation_aggregate_not_stack_size",
     champions,
     menAtArms,
     rallyPoints,
