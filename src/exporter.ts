@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
+import { pathToFileURL } from "node:url";
 import { resolveConfig, discoverGameDir, discoverSaveDir } from "./config.js";
 import { extractGamestate, IronmanError } from "./envelope.js";
 import { Localizer } from "./localization.js";
@@ -8,7 +9,13 @@ import { persistSnapshot } from "./memory.js";
 import { buildSnapshot } from "./snapshot.js";
 import { SaveFileSource } from "./source.js";
 
-async function main(): Promise<void> {
+function achievementLabel(value: boolean | null | undefined): string {
+  if (value === true) return "ENABLED";
+  if (value === false) return "DISABLED";
+  return "UNKNOWN";
+}
+
+export async function exportLatest(): Promise<void> {
   const cfg = resolveConfig();
   const saveDir = cfg.saveDir ?? (await discoverSaveDir());
   if (!saveDir) {
@@ -29,6 +36,7 @@ async function main(): Promise<void> {
   console.log(
     `Read save: ${basename(ref.path)} | game date: ${snapshot.date} | ruler: ${snapshot.overview.rulerName} | title: ${snapshot.overview.primaryTitle}`,
   );
+  console.log(`Achievements: ${achievementLabel(snapshot.game?.achievementsEligible)}`);
 
   // Intentionally excludes the absolute save path and Windows username.
   const sourceFingerprint = createHash("sha256")
@@ -50,11 +58,20 @@ async function main(): Promise<void> {
   console.log(`Memory DB: ${result.databasePath}`);
 }
 
-main().catch((error: unknown) => {
-  if (error instanceof IronmanError) {
-    console.error(error.message);
-  } else {
-    console.error(error instanceof Error ? error.message : String(error));
+async function main(): Promise<void> {
+  try {
+    await exportLatest();
+  } catch (error: unknown) {
+    if (error instanceof IronmanError) {
+      console.error(error.message);
+    } else {
+      console.error(error instanceof Error ? error.message : String(error));
+    }
+    process.exitCode = 1;
   }
-  process.exit(1);
-});
+}
+
+const invokedPath = process.argv[1];
+if (invokedPath && import.meta.url === pathToFileURL(invokedPath).href) {
+  void main();
+}
