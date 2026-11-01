@@ -101,9 +101,19 @@ function topDeFactoTitleId(q: Query, startId: number): number {
   return current;
 }
 
-function realmNameForCharacter(q: Query, loc: Localizer, characterId: number): string | null {
+function realmTitleForCharacter(
+  q: Query,
+  loc: Localizer,
+  characterId: number,
+): { id: number; name: string } | null {
   const domain = numberList(q.at(`/living/${characterId}/landed_data/domain`));
-  return domain[0] !== undefined ? resolveTitleName(q, loc, domain[0]) : null;
+  const primaryTitleId = domain[0];
+  if (primaryTitleId === undefined) return null;
+  return { id: primaryTitleId, name: resolveTitleName(q, loc, primaryTitleId) };
+}
+
+function realmNameForCharacter(q: Query, loc: Localizer, characterId: number): string | null {
+  return realmTitleForCharacter(q, loc, characterId)?.name ?? null;
 }
 
 function collectAllies(q: Query, loc: Localizer, rulerId: number): StrategicTargetAlly[] {
@@ -237,9 +247,10 @@ function extractStrategicTargets(
         playerStrength !== null && currentStrength !== null && currentStrength > 0
           ? playerStrength / currentStrength
           : null;
+      const realmTitle = realmTitleForCharacter(q, loc, rulerId);
       target = {
-        realmTitleId: topTitleId,
-        realmName: resolveTitleName(q, loc, topTitleId),
+        realmTitleId: realmTitle?.id ?? topTitleId,
+        realmName: realmTitle?.name ?? resolveTitleName(q, loc, topTitleId),
         rulerId,
         rulerName: charName(q, rulerId),
         strength,
@@ -262,7 +273,8 @@ function extractStrategicTargets(
   }
 
   const strategicTargets = [...grouped.values()].sort((a, b) => {
-    if (a.currentStrength === null && b.currentStrength === null) return a.realmName.localeCompare(b.realmName);
+    if (a.currentStrength === null && b.currentStrength === null)
+      return a.realmName.localeCompare(b.realmName);
     if (a.currentStrength === null) return 1;
     if (b.currentStrength === null) return -1;
     return a.currentStrength - b.currentStrength;
