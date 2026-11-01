@@ -1,6 +1,6 @@
 import type { Query } from "../parser.js";
 import type { Localizer } from "../localization.js";
-import { extractCharacter } from "./characters.js";
+import { extractCharacter, type CharacterInfo } from "./characters.js";
 import {
   countyContextsHeldBy,
   extractCountyContext,
@@ -25,7 +25,13 @@ export interface VassalInfo {
   name: string;
   dynastyHouseId: number | null;
   dynastyHouseName: string | null;
+  age: number | null;
+  primaryTitle: string | null;
+  skills: CharacterInfo["skills"] | null;
   strengthForLiege: number;
+  vassalPowerValue: number | null;
+  powerfulVassal: boolean;
+  powerfulVassalWithoutCouncilSeat: boolean;
   opinion: number | null;
   councilSeat: boolean;
   inFaction: boolean;
@@ -87,6 +93,24 @@ function strengthForLiege(q: Query, vassalId: number): number {
   if (typeof sfl === "number") return sfl;
   const strength = q.at(`/living/${vassalId}/landed_data/strength`);
   return typeof strength === "number" ? strength : 0;
+}
+
+function playerCouncilMemberIds(q: Query, playerId: number): Set<number> {
+  const result = new Set<number>();
+  for (const rawId of numberList(q.at(`/living/${playerId}/landed_data/council`))) {
+    const ownerId = referenceNumber(q.at(`/council_task_manager/active/${rawId}/owner`), [
+      "character",
+      "id",
+      "value",
+    ]);
+    if (ownerId !== null) {
+      result.add(ownerId);
+      continue;
+    }
+    // Compatibility fallback for older saves where council contains character IDs.
+    if (q.at(`/living/${rawId}/first_name`) !== undefined) result.add(rawId);
+  }
+  return result;
 }
 
 function titleMemberIds(value: unknown): number[] {
@@ -229,9 +253,9 @@ export function extractVassals(
   const topEntries = entries.slice(0, topN);
   const topIds = new Set(topEntries.map((e) => e.id));
 
-  // 5. Council seat set
-  const council = numberList(q.at(`/living/${playerId}/landed_data/council`));
-  const councilSet = new Set(council);
+  // 5. Current saves store council task IDs in landed_data/council. Resolve each task's
+  // owner rather than comparing vassal character IDs to task IDs.
+  const councilSet = playerCouncilMemberIds(q, playerId);
 
   // 6. Single pass over active_opinions — accumulate only for topN vassals targeting player
   const activeOpinions =
@@ -248,20 +272,28 @@ export function extractVassals(
     opinionMap.set(owner, (opinionMap.get(owner) ?? 0) + value);
   }
 
-  // 7. Build final vassal list with their held counties. This keeps granted frontier
-  // counties visible after they leave the player's personal domain.
+  // 7. Build final vassal list with political status, skills and held counties. This
+  // keeps granted frontier counties visible after they leave the player's personal domain.
   const vassals = topEntries.map(({ id, strength }) => {
     const character = extractCharacter(q, loc, id);
     const raw = q.at(`/living/${id}/first_name`);
     const name = character?.name ?? (typeof raw === "string" ? raw : String(raw ?? id));
+    const councilSeat = councilSet.has(id);
+    const powerfulVassal = q.at(`/living/${id}/landed_data/is_powerful_vassal`) === true;
     return {
       id,
       name,
       dynastyHouseId: character?.dynastyHouseId ?? null,
       dynastyHouseName: character?.dynastyHouseName ?? null,
+      age: character?.age ?? null,
+      primaryTitle: character?.primaryTitle ?? null,
+      skills: character?.skills ?? null,
       strengthForLiege: strength,
+      vassalPowerValue: num(q.at(`/living/${id}/landed_data/vassal_power_value`)),
+      powerfulVassal,
+      powerfulVassalWithoutCouncilSeat: powerfulVassal && !councilSeat,
       opinion: opinionMap.has(id) ? opinionMap.get(id)! : null,
-      councilSeat: councilSet.has(id),
+      councilSeat,
       inFaction: factionMemberIds.has(id),
       counties: countyContextsHeldBy(q, loc, id),
     };
