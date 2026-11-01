@@ -7,6 +7,32 @@ export interface DomainBuildingInfo {
   name: string;
 }
 
+type DiagnosticPrimitive = string | number | boolean;
+
+export interface HoldingProvinceReferenceDiagnostic {
+  provinceId: number;
+  matched: "barony" | "county";
+  fieldPath: string;
+}
+
+export interface DomainHoldingDiagnostics {
+  /** Direct field names on the barony title record. */
+  titleFieldNames: string[];
+  /** Primitive direct fields only; bounded so diagnostics never dump title history. */
+  titlePrimitiveFields: Record<string, DiagnosticPrimitive>;
+  /** Direct field names on the county_manager record for the barony's de-jure county. */
+  countyFieldNames: string[];
+  /** Primitive direct county fields only. */
+  countyPrimitiveFields: Record<string, DiagnosticPrimitive>;
+  /** Which CK3 province namespace was visible through jomini. */
+  provinceDatabase: "nested" | "root" | "unavailable";
+  provinceRecordCount: number;
+  /** Union of field names from a few province records, useful for mapping version-specific schemas. */
+  provinceSampleFieldNames: string[];
+  /** Numeric references to this barony/county found under province records, regardless of field name. */
+  provinceReferenceMatches: HoldingProvinceReferenceDiagnostic[];
+}
+
 export interface DomainHoldingInfo {
   titleId: number;
   key: string;
@@ -17,6 +43,8 @@ export interface DomainHoldingInfo {
   buildings: DomainBuildingInfo[];
   dataAvailable: boolean;
   dataSource: "province" | "landed_title_legacy" | "unavailable";
+  /** Emitted only when holding data could not be linked, to teach the parser real-save layouts. */
+  diagnostics?: DomainHoldingDiagnostics;
 }
 
 export interface RealmLawInfo {
@@ -163,7 +191,18 @@ function buildingTypes(value: unknown): string[] {
 }
 
 function provinceRecord(q: Query, provinceId: number): Obj | null {
-  return obj(q.at(`/provinces/${provinceId}`)) ?? obj(q.at(`/provinces/provinces/${provinceId}`));
+  return obj(q.at(`/provinces/provinces/${provinceId}`)) ?? obj(q.at(`/provinces/${provinceId}`));
+}
+
+function provinceDatabase(q: Query): {
+  source: DomainHoldingDiagnostics["provinceDatabase"];
+  records: Obj | null;
+} {
+  const nested = obj(q.at("/provinces/provinces"));
+  if (nested) return { source: "nested", records: nested };
+  const root = obj(q.at("/provinces"));
+  if (root) return { source: "root", records: root };
+  return { source: "unavailable", records: null };
 }
 
 function provinceIdForBarony(q: Query, titleId: number): number | null {
@@ -182,7 +221,7 @@ function provinceIdForBarony(q: Query, titleId: number): number | null {
 
   // Some saves expose an inverse province -> title link instead. Prefer the nested
   // province database when both the wrapper and nested object exist.
-  const provinces = obj(q.at("/provinces/provinces")) ?? obj(q.at("/provinces"));
+  const { records: provinces } = provinceDatabase(q);
   if (!provinces) return null;
   for (const [provinceIdText, rawProvince] of Object.entries(provinces)) {
     const province = obj(rawProvince);
@@ -197,6 +236,113 @@ function provinceIdForBarony(q: Query, titleId: number): number | null {
     if (Number.isFinite(provinceId)) return provinceId;
   }
   return null;
+}
+
+function directPrimitiveFields(record: Obj | null, limit = 32): Record<string, DiagnosticPrimitive> {
+  const result: Record<string, DiagnosticPrimitive> = {};
+  if (!record) return result;
+  for (const [key, value] of Object.entries(record)) {
+    if (Object.keys(result).length >= limit) break;
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+function findNumericReferencePaths(
+  value: unknown,
+  targets: Map<number, "barony" | "county">,
+  prefix = "",
+  depth = 0,
+  limit = 12,
+): Array<{ matched: "barony" | "county"; fieldPath: string }> {
+  if (depth > 4 || value === null || value === undefined || limit <= 0) return [];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const matched = targets.get(value);
+    return matched ? [{ matched, fieldPath: prefix || "value" }] : [];
+  }
+  if (Array.isArray(value)) {
+    const result: Array<{ matched: "barony" | "county"; fieldPath: string }> = [];
+    for (let index = 0; index < value.length && result.length < limit; index += 1) {
+      result.push(
+        ...findNumericReferencePaths(
+          value[index],
+          targets,
+          `${prefix}[${index}]`,
+          depth + 1,
+          limit - result.length,
+        ),
+      );
+    }
+    return result;
+  }
+  const record = obj(value);
+  if (!record) return [];
+  const result: Array<{ matched: "barony" | "county"; fieldPath: string }> = [];
+  for (const [key, child] of Object.entries(record)) {
+    if (result.length >= limit) break;
+    const childPath = prefix ? `${prefix}.${key}` : key;
+    result.push(
+      ...findNumericReferencePaths(
+        child,
+        targets,
+        childPath,
+        depth + 1,
+        limit - result.length,
+      ),
+    );
+  }
+  return result;
+}
+
+function holdingDiagnostics(q: Query, titleId: number): DomainHoldingDiagnostics {
+  const title = obj(q.at(`/landed_titles/landed_titles/${titleId}`));
+  const countyId = title ? numberOrNull(title["de_jure_liege"]) : null;
+  const countyKey = countyId === null ? "" : titleKey(q, countyId);
+  const county = countyKey ? obj(q.at(`/county_manager/counties/${countyKey}`)) : null;
+  const { source, records: provinces } = provinceDatabase(q);
+
+  const provinceReferenceMatches: HoldingProvinceReferenceDiagnostic[] = [];
+  const targets = new Map<number, "barony" | "county">([[titleId, "barony"]]);
+  if (countyId !== null) targets.set(countyId, "county");
+
+  const provinceSampleFieldNames = new Set<string>();
+  if (provinces) {
+    let sampled = 0;
+    for (const [provinceIdText, rawProvince] of Object.entries(provinces)) {
+      const province = obj(rawProvince);
+      if (!province) continue;
+      if (sampled < 4) {
+        Object.keys(province).slice(0, 24).forEach((field) => provinceSampleFieldNames.add(field));
+        sampled += 1;
+      }
+      if (provinceReferenceMatches.length >= 12) continue;
+      const provinceId = Number(provinceIdText);
+      if (!Number.isFinite(provinceId)) continue;
+      const matches = findNumericReferencePaths(
+        province,
+        targets,
+        "",
+        0,
+        12 - provinceReferenceMatches.length,
+      );
+      for (const match of matches) {
+        provinceReferenceMatches.push({ provinceId, ...match });
+      }
+    }
+  }
+
+  return {
+    titleFieldNames: title ? Object.keys(title).slice(0, 64) : [],
+    titlePrimitiveFields: directPrimitiveFields(title),
+    countyFieldNames: county ? Object.keys(county).slice(0, 64) : [],
+    countyPrimitiveFields: directPrimitiveFields(county),
+    provinceDatabase: source,
+    provinceRecordCount: provinces ? Object.keys(provinces).length : 0,
+    provinceSampleFieldNames: [...provinceSampleFieldNames].slice(0, 64),
+    provinceReferenceMatches,
+  };
 }
 
 function extractHolding(q: Query, loc: Localizer, titleId: number): DomainHoldingInfo {
@@ -225,7 +371,7 @@ function extractHolding(q: Query, loc: Localizer, titleId: number): DomainHoldin
       }))
     : [];
 
-  return {
+  const result: DomainHoldingInfo = {
     titleId,
     key,
     name: resolveTitleName(q, loc, titleId),
@@ -236,6 +382,8 @@ function extractHolding(q: Query, loc: Localizer, titleId: number): DomainHoldin
     dataAvailable: holding !== null,
     dataSource,
   };
+  if (holding === null) result.diagnostics = holdingDiagnostics(q, titleId);
+  return result;
 }
 
 function extractRealmRules(q: Query, loc: Localizer, playerId: number): RealmRulesInfo {
