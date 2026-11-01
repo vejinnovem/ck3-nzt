@@ -66,6 +66,72 @@ test("strategic changes include numeric deltas", () => {
   });
 });
 
+test("strategic changes include realm growth, spendable resources and advisory counts", () => {
+  const previous = makeSnapshot("879.8.11", 365, 3086);
+  const current = makeSnapshot("879.8.21", 365, 3086);
+
+  previous.ruler = { prestigeCurrency: 160, pietyCurrency: 800 } as Snapshot["ruler"];
+  current.ruler = { prestigeCurrency: 171, pietyCurrency: 806 } as Snapshot["ruler"];
+
+  previous.realm = {
+    countyCount: 13,
+    playerHeldCountyCount: 6,
+    vassalHeldCountyCount: 7,
+  } as Snapshot["realm"];
+  current.realm = {
+    countyCount: 23,
+    playerHeldCountyCount: 6,
+    vassalHeldCountyCount: 17,
+  } as Snapshot["realm"];
+
+  previous.importantActions = {
+    actions: [
+      ...Array.from({ length: 4 }, () => ({ type: "action_can_vassalize" })),
+      { type: "action_powerful_vassal_not_on_council" },
+    ],
+  } as Snapshot["importantActions"];
+  current.importantActions = {
+    actions: [
+      ...Array.from({ length: 3 }, () => ({ type: "action_can_vassalize" })),
+      { type: "action_powerful_vassal_not_on_council" },
+      { type: "action_powerful_vassal_not_on_council" },
+    ],
+  } as Snapshot["importantActions"];
+
+  const changes = buildChanges(previous, current).changes;
+
+  expect(changes).toContainEqual({
+    key: "realm.countyCount",
+    before: 13,
+    after: 23,
+    delta: 10,
+  });
+  expect(changes).toContainEqual({
+    key: "realm.vassalHeldCountyCount",
+    before: 7,
+    after: 17,
+    delta: 10,
+  });
+  expect(changes).toContainEqual({
+    key: "economy.prestigeCurrency",
+    before: 160,
+    after: 171,
+    delta: 11,
+  });
+  expect(changes).toContainEqual({
+    key: "importantActions.canVassalize",
+    before: 4,
+    after: 3,
+    delta: -1,
+  });
+  expect(changes).toContainEqual({
+    key: "importantActions.powerfulVassalNotOnCouncil",
+    before: 1,
+    after: 2,
+    delta: 1,
+  });
+});
+
 test("persistent local config can select the AI export directory", async () => {
   const root = await mkdtemp(join(tmpdir(), "ck3-nzt-output-config-"));
   temporaryDirectories.push(root);
