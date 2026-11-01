@@ -8,7 +8,7 @@ export function registerRealmTool(server: McpServer, cache: SnapshotCache) {
     {
       title: "Realm",
       description:
-        "Every county in the played ruler's de-facto realm, derived from the title graph rather than a hard-coded region. Includes holder, control, culture, faith/rite context and whether it is held personally or by a vassal.",
+        "Every county in the played ruler's de-facto realm, plus strategically relevant foreign counties from the same de-jure kingdom, allied realms, truces, hostile-opinion realms and active-war enemies. Exact geographic adjacency is reported separately because it needs static map data.",
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -34,6 +34,23 @@ export function registerRealmTool(server: McpServer, cache: SnapshotCache) {
         body += `- ${county.name}: holder ${holder}, control ${control}, culture ${culture}, faith ${faith}, rite ${rite}${county.heldByPlayer ? " [personal]" : ""}\n`;
       }
       body += note;
+
+      if (realm.relevantForeignCounties.length > 0) {
+        const foreign = truncate(realm.relevantForeignCounties, 60);
+        body += `\n# Relevant foreign counties (${realm.relevantForeignCountyCount})\n`;
+        body += `- same de-jure kingdom: ${realm.relevantForeignCountsByReason.same_de_jure_kingdom}\n`;
+        body += `- allied realms: ${realm.relevantForeignCountsByReason.ally_realm}\n`;
+        body += `- truce realms: ${realm.relevantForeignCountsByReason.truce_realm}\n`;
+        body += `- hostile-opinion realms: ${realm.relevantForeignCountsByReason.hostile_opinion_realm}\n`;
+        body += `- active-war enemy realms: ${realm.relevantForeignCountsByReason.active_war_enemy_realm}\n`;
+        for (const county of foreign.shown) {
+          body += `- ${county.name} (${county.realmName}): ${county.relevance.join(", ")}; holder ${county.holderName ?? "?"}, control ${county.control ?? "?"}\n`;
+        }
+        body += foreign.note;
+      }
+
+      body += `\nExact geographic adjacency: ${realm.exactAdjacencyAvailable ? "available" : "not yet available"}.`;
+      if (realm.limitation) body += `\nLimitation: ${realm.limitation}`;
       return { content: [{ type: "text", text: stamp(snap, body) }] };
     },
   );
