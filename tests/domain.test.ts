@@ -9,9 +9,9 @@ landed_titles={
  landed_titles={
   1={ key="d_test" name="Test Duchy" holder=10 }
   2={ key="c_alpha" name="Alpha" holder=10 de_jure_liege=1 capital=2 }
-  3={ key="b_alpha" name="Alpha Hold" holder=10 de_jure_liege=2 capital_barony=yes }
+  3={ key="b_alpha" name="Alpha Hold" holder=10 de_jure_liege=2 capital_barony=yes holding={ type="tribal_holding" buildings={ { type="market_villages_01" } { type="palisades_01" } } } }
   4={ key="c_beta" name="Beta" holder=10 de_jure_liege=1 capital=5 }
-  5={ key="b_beta" name="Beta Hold" holder=10 de_jure_liege=4 capital_barony=yes }
+  5={ key="b_beta" name="Beta Hold" holder=10 de_jure_liege=4 capital_barony=yes holding={ type="tribal_holding" buildings={ { type="war_camps_01" } } } }
  }
 }
 county_manager={
@@ -30,6 +30,7 @@ living={
    vassal_limit=20
    balance=1.75
    realm_capital=3
+   laws={ "tribal_authority_1" "confederate_partition_succession_law" "male_preference_law" }
   }
  }
 }
@@ -70,6 +71,54 @@ test("extractRealmEconomy returns limits, cash flow and county details", async (
       capitalTitleId: 5,
       capitalName: "Beta Hold",
       isRealmCapital: false,
+    },
+  ]);
+});
+
+test("extractRealmEconomy exposes realm rules and current domain buildings", async () => {
+  const economy = await queryGamestate(GS, (q) => extractRealmEconomy(q, new Localizer(null)));
+
+  expect(economy.realmRules).toEqual({
+    governmentKey: "tribal_government",
+    governmentName: "tribal_government",
+    governmentSource: "law_inference",
+    authority: {
+      key: "tribal_authority_1",
+      name: "tribal_authority_1",
+      level: 1,
+      kind: "tribal",
+    },
+    laws: [
+      { key: "tribal_authority_1", name: "tribal_authority_1" },
+      {
+        key: "confederate_partition_succession_law",
+        name: "confederate_partition_succession_law",
+      },
+      { key: "male_preference_law", name: "male_preference_law" },
+    ],
+  });
+
+  expect(economy.holdings).toEqual([
+    {
+      titleId: 3,
+      key: "b_alpha",
+      name: "Alpha Hold",
+      holdingType: "tribal_holding",
+      holdingTypeName: "tribal_holding",
+      buildings: [
+        { type: "market_villages_01", name: "market_villages_01" },
+        { type: "palisades_01", name: "palisades_01" },
+      ],
+      dataAvailable: true,
+    },
+    {
+      titleId: 5,
+      key: "b_beta",
+      name: "Beta Hold",
+      holdingType: "tribal_holding",
+      holdingTypeName: "tribal_holding",
+      buildings: [{ type: "war_camps_01", name: "war_camps_01" }],
+      dataAvailable: true,
     },
   ]);
 });
