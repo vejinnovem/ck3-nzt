@@ -54,7 +54,26 @@ export interface WarScoreCapability {
   limitation: string;
 }
 
+export interface MenAtArmsReliability {
+  /** Whether the recovered global-regiment breakdown reconciles with realm mobilisation totals. */
+  breakdownReliable: boolean;
+  /** Number of MAA regiment records actually linked to the player by the extractor. */
+  recoveredRegimentCount: number;
+  /**
+   * strength_without_hires - levy - champions. This is an exact arithmetic remainder from
+   * serialized realm totals, but it can include special troops as well as Men-at-Arms.
+   */
+  nonLevyNonChampionMaxStrength: number | null;
+  /** Max soldiers represented by the recovered MAA records, when known. */
+  recoveredMaxSoldiers: number | null;
+  /** Arithmetic remainder minus recovered MAA max soldiers (or zero recovered records). */
+  discrepancy: number | null;
+  /** Human-readable warning when slotsUsed/regiments must not be treated as authoritative. */
+  limitation: string | null;
+}
+
 export interface SnapshotMilitaryInfo extends MilitaryInfo {
+  menAtArmsReliability: MenAtArmsReliability;
   warScoreCapability: WarScoreCapability;
 }
 
@@ -96,6 +115,39 @@ function numberList(v: unknown): number[] {
   if (typeof v === "number" && Number.isFinite(v)) return [v];
   if (!Array.isArray(v)) return [];
   return v.filter((entry): entry is number => typeof entry === "number" && Number.isFinite(entry));
+}
+
+export function assessMenAtArmsReliability(military: MilitaryInfo): MenAtArmsReliability {
+  const nonLevyNonChampionMaxStrength =
+    military.strengthWithoutHires !== null && military.levy !== null
+      ? Math.max(0, military.strengthWithoutHires - military.levy - military.champions.current)
+      : null;
+
+  const recoveredRegimentCount = military.menAtArms.regiments.length;
+  const recoveredMaxSoldiers = military.menAtArms.totalMaxSoldiers;
+  const recoveredForComparison =
+    recoveredMaxSoldiers ?? (recoveredRegimentCount === 0 ? 0 : null);
+  const discrepancy =
+    nonLevyNonChampionMaxStrength !== null && recoveredForComparison !== null
+      ? nonLevyNonChampionMaxStrength - recoveredForComparison
+      : null;
+
+  const breakdownReliable =
+    military.menAtArms.source !== "unavailable" &&
+    nonLevyNonChampionMaxStrength !== null &&
+    recoveredForComparison !== null &&
+    Math.abs(discrepancy ?? Number.POSITIVE_INFINITY) < 0.01;
+
+  return {
+    breakdownReliable,
+    recoveredRegimentCount,
+    nonLevyNonChampionMaxStrength,
+    recoveredMaxSoldiers,
+    discrepancy,
+    limitation: breakdownReliable
+      ? null
+      : "Global regiment linking does not reconcile with mobilisation totals. nonLevyNonChampionMaxStrength can include Men-at-Arms and special troops; do not interpret slotsUsed=0 or an empty regiments list as confirmed zero Men-at-Arms.",
+  };
 }
 
 /**
@@ -242,6 +294,7 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
     );
     const military: SnapshotMilitaryInfo = {
       ...militaryBase,
+      menAtArmsReliability: assessMenAtArmsReliability(militaryBase),
       warScoreCapability: {
         fullPlayerVisibleWarScoreAvailable: false,
         source: "runtime_computed_not_serialized",
