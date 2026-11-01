@@ -15,6 +15,8 @@ export type CharacterFocusKind = "lifestyle" | "education" | "other";
 export interface CharacterInfo {
   id: number;
   name: string;
+  dynastyHouseId: number | null;
+  dynastyHouseName: string | null;
   birth: string | null;
   age: number | null;
   female: boolean;
@@ -79,6 +81,12 @@ function stringOrNull(v: unknown): string | null {
   return typeof v === "string" ? v : null;
 }
 
+function obj(v: unknown): Record<string, unknown> | null {
+  return v !== null && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : null;
+}
+
 function numberList(v: unknown): number[] {
   if (typeof v === "number") return [v];
   if (!Array.isArray(v)) return [];
@@ -134,6 +142,30 @@ function ageAt(birthValue: unknown, currentValue: unknown): number | null {
   return age >= 0 ? age : null;
 }
 
+export function resolveDynastyHouseName(
+  q: Query,
+  loc: Localizer,
+  houseId: number | null,
+): string | null {
+  if (houseId === null) return null;
+  const paths = [
+    `/dynasties/dynasty_house/${houseId}`,
+    `/dynasties/dynasty_houses/${houseId}`,
+    `/dynasty_house/${houseId}`,
+  ];
+  for (const path of paths) {
+    const house = obj(q.at(path));
+    if (!house) continue;
+    for (const field of ["name", "key", "base_name"]) {
+      const raw = house[field];
+      if (typeof raw !== "string" || raw.length === 0) continue;
+      const localized = loc.resolve(raw);
+      return localized !== raw ? localized : raw;
+    }
+  }
+  return null;
+}
+
 export function extractCharacter(q: Query, loc: Localizer, id: number): CharacterInfo | null {
   const base = `/living/${id}`;
   const firstName = q.at(`${base}/first_name`);
@@ -155,6 +187,7 @@ export function extractCharacter(q: Query, loc: Localizer, id: number): Characte
   const traitIndices = (q.at(`${base}/traits`) as number[] | undefined) ?? [];
   const traits = traitIndices.map((idx) => loc.resolveTrait(idx));
 
+  const dynastyHouseId = numberOrNull(q.at(`${base}/dynasty_house`));
   const birthValue = q.at(`${base}/birth`);
   const birth = birthValue === undefined ? null : formatCk3Date(birthValue);
   const age = ageAt(birthValue, q.at("/date"));
@@ -213,6 +246,8 @@ export function extractCharacter(q: Query, loc: Localizer, id: number): Characte
   return {
     id,
     name: String(firstName),
+    dynastyHouseId,
+    dynastyHouseName: resolveDynastyHouseName(q, loc, dynastyHouseId),
     birth,
     age,
     female,
