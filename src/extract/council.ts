@@ -16,6 +16,8 @@ export interface CouncilTaskInfo {
 export interface CouncillorInfo {
   id: number;
   name: string;
+  dynastyHouseId: number | null;
+  dynastyHouseName: string | null;
   age: number | null;
   skills: CharacterInfo["skills"];
   traits: string[];
@@ -27,6 +29,8 @@ export interface CouncillorInfo {
 export interface CourtCandidateInfo {
   id: number;
   name: string;
+  dynastyHouseId: number | null;
+  dynastyHouseName: string | null;
   age: number | null;
   female: boolean;
   skills: CharacterInfo["skills"];
@@ -133,6 +137,8 @@ function toCouncillor(
   return {
     id,
     name: character.name,
+    dynastyHouseId: character.dynastyHouseId,
+    dynastyHouseName: character.dynastyHouseName,
     age: character.age,
     skills: character.skills,
     traits: character.traits,
@@ -247,6 +253,8 @@ export function extractCouncil(q: Query, loc: Localizer, candidateLimit = 30): C
     .map(({ character, status }) => ({
       id: character.id,
       name: character.name,
+      dynastyHouseId: character.dynastyHouseId,
+      dynastyHouseName: character.dynastyHouseName,
       age: character.age,
       female: character.female,
       skills: character.skills,
