@@ -6,6 +6,10 @@ import { Localizer } from "../src/localization.js";
 const GS = Buffer.from(`date=867.1.1
 played_character={ character=10 player=1 }
 traits_lookup={ "diligent" }
+landed_titles={ landed_titles={
+ 200={ key="c_opole" name="Opole" holder=10 }
+}}
+county_manager={ counties={ c_opole={ county_control=0 culture=1 } } }
 council_task_manager={
  active={
   100={ type="task_manage_domain" owner=11 court_owner=10 }
@@ -59,7 +63,7 @@ test("extractCouncil resolves landed council task IDs to councillor characters",
   expect(council.taskIds).toEqual([100, 101]);
   expect(council.memberIds).toEqual([11, 12]);
   expect(council.members.map((member) => member.name)).toEqual(["Steward", "Marshal"]);
-  expect(council.members[0]?.activeTask).toEqual({
+  expect(council.members[0]?.activeTask).toMatchObject({
     id: 100,
     type: "task_manage_domain",
     ownerId: 11,
@@ -96,4 +100,36 @@ test("extractCouncil resolves landed council task IDs to councillor characters",
   expect(council.candidates.find((candidate) => candidate.name === "Guest")?.councilEligibility).toBe(
     "unknown",
   );
+});
+
+test("extractCouncil preserves the target county of a targeted task", async () => {
+  const gamestate = Buffer.from(`
+date=877.2.16
+played_character={ character=10 }
+landed_titles={ landed_titles={
+ 200={ key="c_opole" name="Opole" holder=20 }
+}}
+county_manager={ counties={ c_opole={ county_control=0 culture=1 } } }
+council_task_manager={ active={
+ 500={ type="task_increase_control" owner=12 court_owner=10 target=200 }
+}}
+living={
+ 10={ first_name="Siemowit" culture=1 landed_data={ council={ 500 } } }
+ 12={ first_name="Rodislav" skill={ 1 14 1 1 1 10 } court_data={ employer=10 council_task=500 } }
+ 20={ first_name="Niemir" }
+}
+`);
+
+  const council = await queryGamestate(gamestate, (q) => extractCouncil(q, new Localizer(null)));
+  expect(council.members[0]?.activeTask).toMatchObject({
+    type: "task_increase_control",
+    targetTitleId: 200,
+    targetTitle: "Opole",
+    targetCounty: {
+      titleId: 200,
+      name: "Opole",
+      holderId: 20,
+      control: 0,
+    },
+  });
 });

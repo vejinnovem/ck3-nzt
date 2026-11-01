@@ -10,9 +10,17 @@ import { registerFactionsTool } from "./factions.js";
 import { registerExpansionTool } from "./expansion.js";
 import { registerTitlesTool } from "./titles.js";
 import { registerForeignRealmTool } from "./foreignRealm.js";
+import {
+  registerEducationTool,
+  registerImportantActionsTool,
+  registerRealmTool,
+} from "./realm.js";
 
 export function registerAllTools(server: McpServer, cache: SnapshotCache) {
   registerOverview(server, cache);
+  registerRealmTool(server, cache);
+  registerEducationTool(server, cache);
+  registerImportantActionsTool(server, cache);
   registerCharacterTools(server, cache);
   registerMilitaryTool(server, cache);
   registerSuccessionTool(server, cache);

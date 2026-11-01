@@ -33,6 +33,12 @@ import {
   type CourtPositionsInfo,
 } from "./extract/courtPositions.js";
 import { extractGameInfo, type GameInfo } from "./extract/game.js";
+import { extractPlayerRealm, type PlayerRealmInfo } from "./extract/realm.js";
+import { extractEducation, type EducationInfo } from "./extract/education.js";
+import {
+  extractImportantActions,
+  type ImportantActionsInfo,
+} from "./extract/importantActions.js";
 
 export interface RealmOverview {
   rulerName: string;
@@ -87,6 +93,9 @@ export interface Snapshot {
   ruler?: CharacterInfo | null;
   family?: ImmediateFamilyInfo;
   economy?: RealmEconomyInfo;
+  realm?: PlayerRealmInfo | null;
+  education?: EducationInfo;
+  importantActions?: ImportantActionsInfo;
   council?: CouncilInfo;
   courtPositions?: CourtPositionsInfo;
   military: SnapshotMilitaryInfo;
@@ -286,6 +295,9 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
     const ruler = extractCharacter(q, loc, playerId);
     const family = extractImmediateFamily(q, loc, playerId);
     const economy = extractRealmEconomy(q, loc);
+    const realm = extractPlayerRealm(q, loc);
+    const education = extractEducation(q, loc);
+    const importantActions = extractImportantActions(q, loc);
     const council = extractCouncil(q, loc);
     const courtPositions = extractCourtPositions(q, loc);
     const militaryBase = correctRaidDomainRelevance(
@@ -323,6 +335,9 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
       ruler,
       family,
       economy,
+      realm,
+      education,
+      importantActions,
       council,
       courtPositions,
       military,
