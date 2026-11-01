@@ -315,7 +315,7 @@ function invalidateInconsistentSinglePlayerArmyCount(
   const playerArmies = armies.filter((army) => army.relation === "player");
   if (playerArmies.length !== 1) return armies;
 
-  const playerArmy = playerArmies[0];
+  const playerArmy = playerArmies[0]!;
   const realmCurrentStrength = num(q.at(`/living/${playerId}/landed_data/current_strength`));
   if (playerArmy.currentSoldiers === null || realmCurrentStrength === null) return armies;
 
