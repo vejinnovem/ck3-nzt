@@ -2,6 +2,7 @@ import type { Query } from "../parser.js";
 import type { Localizer } from "../localization.js";
 import { formatCk3Date } from "../format.js";
 import { forEachRelation } from "./scan.js";
+import { activeSubjectContracts } from "./subjectContracts.js";
 
 export interface DipRef {
   id: number;
@@ -166,6 +167,7 @@ function puppetType(evidence: string[]): PuppetRef["type"] {
   const joined = evidence.join("|").toLowerCase();
   if (joined.includes("external_theological_agent_puppet")) return "clerical_ruler";
   if (joined.includes("theological_agent_puppet")) return "realm_priest";
+  if (joined.includes("make_clerical_puppet_interaction")) return "realm_priest";
   if (joined.includes("secular") && joined.includes("puppet")) return "secular_ruler";
   return "unknown";
 }
@@ -193,7 +195,9 @@ function extractPuppets(q: Query, playerId: number): PuppetRef[] {
 
   // Scripted relations can also be stored in the pairwise relation manager. Capture
   // relation names such as theological_agent_puppet even when Paradox moves the
-  // underlying serialization between patches.
+  // underlying serialization between patches. The make_clerical_puppet interaction
+  // cooldown is also enough to classify the counterpart as a realm-priest puppet type,
+  // while direction remains unknown unless an authoritative character marker exists.
   forEachRelation(q, playerId, (otherId, entry) => {
     const evidence = collectMarkerPaths(entry, PUPPET_PATTERN);
     if (evidence.length === 0) return;
@@ -214,7 +218,7 @@ function extractPuppets(q: Query, playerId: number): PuppetRef[] {
 }
 
 function extractTributaries(q: Query, playerId: number): TributaryRef[] {
-  const active = asObject(q.at("/vassal_contracts/active"));
+  const { active, source } = activeSubjectContracts(q);
   if (!active) return [];
   const result: TributaryRef[] = [];
 
@@ -240,7 +244,7 @@ function extractTributaries(q: Query, playerId: number): TributaryRef[] {
     if (subjectId === null || liegeId === null) continue;
     if (subjectId !== playerId && liegeId !== playerId) continue;
 
-    const evidence = collectMarkerPaths(contract, SPECIAL_SUBJECT_PATTERN);
+    const evidence = [source, ...collectMarkerPaths(contract, SPECIAL_SUBJECT_PATTERN)];
     const independentSubject = isIndependentRuler(q, subjectId);
     const explicitTributaryMarker = evidence.some((path) => /tribut/i.test(path));
 
