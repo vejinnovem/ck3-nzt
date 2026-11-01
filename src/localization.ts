@@ -27,7 +27,7 @@ export class Localizer {
       entries = readdirSync(dir);
     } catch {
       return;
-    } // missing dir -> keep already loaded fallback entries
+    }
     for (const name of entries) {
       const path = join(dir, name);
       let st;
@@ -39,7 +39,7 @@ export class Localizer {
       if (st.isDirectory()) {
         this.loadDir(path);
         continue;
-      } // CK3 nests subfolders
+      }
       if (!name.endsWith(".yml")) continue;
       this.loadFile(path);
     }
@@ -49,7 +49,6 @@ export class Localizer {
     const text = readFileSync(path, "utf8");
     for (const line of text.split("\n")) {
       const m = /^\s+([\w.-]+):\d*\s+"(.*)"/.exec(line);
-      // m matched -> both non-optional capture groups are present
       if (m) this.map.set(m[1]!, m[2]!);
     }
   }
@@ -68,11 +67,18 @@ export class Localizer {
         "ck3-advisor: no localization loaded (game dir missing?); showing raw keys.\n",
       );
     }
-    return key; // fallback
+    return key;
   }
 
   resolveTrait(idx: number): string {
     const ident = this.traitLookup?.[idx];
-    return ident ? this.resolve(ident) : `trait_${idx}`;
+    if (!ident) return `trait_${idx}`;
+
+    const direct = this.resolve(ident);
+    if (direct !== ident) return direct;
+
+    const prefixed = `trait_${ident}`;
+    const resolvedPrefixed = this.resolve(prefixed);
+    return resolvedPrefixed !== prefixed ? resolvedPrefixed : ident;
   }
 }

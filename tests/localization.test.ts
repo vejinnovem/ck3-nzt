@@ -25,9 +25,10 @@ test("a null game dir yields an empty localizer that echoes keys", () => {
   expect(loc.resolve("k_bohemia")).toBe("k_bohemia");
 });
 
-test("resolveTrait() maps an index through traits_lookup then localizes", () => {
+test("resolveTrait() supports direct and trait_-prefixed localization keys", () => {
   const loc = new Localizer(GAME_DIR);
   loc.setTraitLookup(["just", "diligent"]);
   expect(loc.resolveTrait(0)).toBe("Sprawiedliwy");
+  expect(loc.resolveTrait(1)).toBe("Diligent");
   expect(loc.resolveTrait(99)).toBe("trait_99");
 });

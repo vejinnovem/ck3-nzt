@@ -8,11 +8,15 @@ played_character={ character=10 player=1 }
 landed_titles={
  landed_titles={
   1={ key="d_test" name="Test Duchy" holder=10 }
-  2={ key="c_alpha" name="Alpha" holder=10 de_jure_liege=1 capital=2 }
-  3={ key="b_alpha" name="Alpha Hold" holder=10 de_jure_liege=2 capital_barony=yes holding={ type="tribal_holding" buildings={ { type="market_villages_01" } { type="palisades_01" } } } }
+  2={ key="c_alpha" name="Alpha" holder=10 de_jure_liege=1 capital=3 }
+  3={ key="b_alpha" name="Alpha Hold" holder=10 de_jure_liege=2 capital_barony=yes province=101 }
   4={ key="c_beta" name="Beta" holder=10 de_jure_liege=1 capital=5 }
-  5={ key="b_beta" name="Beta Hold" holder=10 de_jure_liege=4 capital_barony=yes holding={ type="tribal_holding" buildings={ { type="war_camps_01" } } } }
+  5={ key="b_beta" name="Beta Hold" holder=10 de_jure_liege=4 capital_barony=yes province=102 }
  }
+}
+provinces={
+ 101={ holding={ type="tribal_holding" buildings={ { type="market_villages_01" } { type="palisades_01" } } } }
+ 102={ holding={ type="tribal_holding" buildings={ { type="war_camps_01" } } } }
 }
 county_manager={
  counties={
@@ -75,7 +79,7 @@ test("extractRealmEconomy returns limits, cash flow and county details", async (
   ]);
 });
 
-test("extractRealmEconomy exposes realm rules and current domain buildings", async () => {
+test("extractRealmEconomy exposes realm rules and province-backed domain buildings", async () => {
   const economy = await queryGamestate(GS, (q) => extractRealmEconomy(q, new Localizer(null)));
 
   expect(economy.realmRules).toEqual({
@@ -103,6 +107,7 @@ test("extractRealmEconomy exposes realm rules and current domain buildings", asy
       titleId: 3,
       key: "b_alpha",
       name: "Alpha Hold",
+      provinceId: 101,
       holdingType: "tribal_holding",
       holdingTypeName: "tribal_holding",
       buildings: [
@@ -110,15 +115,18 @@ test("extractRealmEconomy exposes realm rules and current domain buildings", asy
         { type: "palisades_01", name: "palisades_01" },
       ],
       dataAvailable: true,
+      dataSource: "province",
     },
     {
       titleId: 5,
       key: "b_beta",
       name: "Beta Hold",
+      provinceId: 102,
       holdingType: "tribal_holding",
       holdingTypeName: "tribal_holding",
       buildings: [{ type: "war_camps_01", name: "war_camps_01" }],
       dataAvailable: true,
+      dataSource: "province",
     },
   ]);
 });
