@@ -24,6 +24,7 @@ import {
   extractCourtPositions,
   type CourtPositionsInfo,
 } from "./extract/courtPositions.js";
+import { extractGameInfo, type GameInfo } from "./extract/game.js";
 
 export interface RealmOverview {
   rulerName: string;
@@ -41,6 +42,7 @@ export interface Snapshot {
   overview: RealmOverview;
   // Optional in the TypeScript interface so older stored/test snapshots remain readable.
   // buildSnapshot always emits these advisory sections for new snapshots.
+  game?: GameInfo;
   ruler?: CharacterInfo | null;
   family?: ImmediateFamilyInfo;
   economy?: RealmEconomyInfo;
@@ -120,6 +122,7 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
       prestige: num(q.at(`${alive}/prestige/accumulated`)),
       piety: num(q.at(`${alive}/piety/accumulated`)),
     };
+    const game = extractGameInfo(q);
     const ruler = extractCharacter(q, loc, playerId);
     const family = extractImmediateFamily(q, loc, playerId);
     const economy = extractRealmEconomy(q, loc);
@@ -136,6 +139,7 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
       date,
       parsedAt: Date.now(),
       overview,
+      game,
       ruler,
       family,
       economy,
