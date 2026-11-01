@@ -113,10 +113,43 @@ function maxFactionPowerRatio(snapshot: Snapshot): number | null {
   return max;
 }
 
+function titleSignature(
+  titles: Array<{ id: number; name: string }> | undefined,
+): string | null {
+  if (!titles || titles.length === 0) return null;
+  return [...titles]
+    .sort((a, b) => a.id - b.id)
+    .map((title) => `${title.id}:${title.name}`)
+    .join("|");
+}
+
+function successionAssignmentSignature(snapshot: Snapshot): string | null {
+  const assignments = snapshot.succession?.titleAssignmentsByHeir;
+  if (!assignments || assignments.length === 0) return null;
+
+  return [...assignments]
+    .sort((a, b) => a.heirId - b.heirId)
+    .map((assignment) => {
+      const titleIds = assignment.titles
+        .map((title) => title.titleId)
+        .sort((a, b) => a - b)
+        .join(",");
+      return `${assignment.heirId}:${assignment.heirName}=${titleIds}`;
+    })
+    .join("|");
+}
+
 export function summarizeSnapshot(snapshot: Snapshot): Record<string, Scalar> {
   const opinions = snapshot.vassals
     .map((vassal) => vassal.opinion)
     .filter((opinion): opinion is number => opinion !== null);
+
+  const titleCount =
+    snapshot.economy?.heldTitleCount ??
+    (typeof snapshot.titles?.total === "number" ? snapshot.titles.total : null);
+  const countyCount =
+    snapshot.economy?.heldCountyCount ??
+    (Array.isArray(snapshot.titles?.counties) ? snapshot.titles.counties.length : null);
 
   return {
     "ruler.name": snapshot.overview.rulerName,
@@ -125,6 +158,11 @@ export function summarizeSnapshot(snapshot: Snapshot): Record<string, Scalar> {
     "economy.gold": snapshot.overview.gold,
     "economy.prestige": snapshot.overview.prestige,
     "economy.piety": snapshot.overview.piety,
+    "realm.heldTitleCount": titleCount,
+    "realm.heldCountyCount": countyCount,
+    "realm.heldCounties": titleSignature(snapshot.titles?.counties),
+    "realm.heldDuchies": titleSignature(snapshot.titles?.duchies),
+    "succession.titleAssignments": successionAssignmentSignature(snapshot),
     "military.levy": snapshot.military.levy,
     "military.strength": snapshot.military.strength,
     "military.currentStrength": snapshot.military.currentStrength,
