@@ -1,11 +1,23 @@
 import type { Query } from "../parser.js";
 import type { Localizer } from "../localization.js";
+import { formatCk3Date } from "../format.js";
 import { extractCharacter, type CharacterInfo } from "./characters.js";
 import { extractCountyContext, type CountyContextInfo } from "./countyContext.js";
 import { resolveTitleName, titleTierFromKey } from "./titleUtils.js";
 
 export type CouncilOffice = "chancellor" | "steward" | "marshal" | "spymaster" | "court_chaplain";
 export type CourtStatus = "courtier" | "guest";
+export type CharacterPresenceStatus =
+  | "ruler"
+  | "at_player_court"
+  | "visiting_player_court"
+  | "travelling"
+  | "in_army"
+  | "unknown";
+export type CouncilAvailabilityStatus =
+  | "likely_unavailable_travelling"
+  | "likely_unavailable_in_army"
+  | "not_evaluated";
 
 type Obj = Record<string, unknown>;
 type Primitive = string | number | boolean;
@@ -28,6 +40,29 @@ export interface CouncilTaskInfo {
   diagnostics?: CouncilTaskDiagnostics;
 }
 
+export interface TravelReferenceInfo {
+  planId: string | null;
+  role: string;
+  path: string;
+}
+
+export interface CharacterAvailabilityInfo {
+  presenceStatus: CharacterPresenceStatus;
+  councilAvailability: CouncilAvailabilityStatus;
+  employerId: number | null;
+  hostId: number | null;
+  armyId: number | null;
+  wantsToLeaveCourt: boolean;
+  leaveCourtDate: string | null;
+  travelling: boolean;
+  travelPlanIds: string[];
+  travelRoles: string[];
+  travelReferences: TravelReferenceInfo[];
+  unclassifiedTravelReferencePaths: string[];
+  source: "court_data_and_travel_plans_best_effort";
+  limitation: string;
+}
+
 export interface CouncillorInfo {
   id: number;
   name: string;
@@ -39,6 +74,7 @@ export interface CouncillorInfo {
   primaryTitle: string | null;
   councilTaskId: number | null;
   activeTask: CouncilTaskInfo | null;
+  availability: CharacterAvailabilityInfo;
 }
 
 export interface CourtCandidateInfo {
@@ -54,6 +90,7 @@ export interface CourtCandidateInfo {
   courtStatus: CourtStatus;
   /** We cannot infer office eligibility reliably without doctrine/static game data. */
   councilEligibility: "current_councillor" | "unknown";
+  availability: CharacterAvailabilityInfo;
 }
 
 export interface CouncilOfficeInfo {
@@ -93,6 +130,9 @@ const TARGETED_TASKS = new Set([
   "task_fabricate_claim",
   "task_convert_county",
 ]);
+
+const CHARACTER_TRAVEL_PATH =
+  /(owner|character|entourage|participant|travel[_-]?leader|leader|companion|guest|ward|guardian|travell?er)/i;
 
 function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -143,6 +183,116 @@ function containsNumberReference(value: unknown, target: number, depth = 0): boo
   return Object.values(value as Obj).some((child) =>
     containsNumberReference(child, target, depth + 1),
   );
+}
+
+function travelRole(path: string): string {
+  const lower = path.toLowerCase();
+  if (lower.includes("entourage")) return "entourage";
+  if (lower.includes("travel_leader") || lower.includes("travel-leader")) return "travel_leader";
+  if (lower.includes("participant")) return "participant";
+  if (lower.includes("companion")) return "companion";
+  if (lower.includes("guardian")) return "guardian";
+  if (lower.includes("ward")) return "ward";
+  if (lower.includes("guest")) return "guest";
+  if (lower.includes("owner")) return "owner";
+  if (lower.includes("leader")) return "leader";
+  if (lower.includes("traveler") || lower.includes("traveller")) return "traveller";
+  if (lower.includes("character")) return "character";
+  return "unclassified";
+}
+
+function travelPlanId(path: string): string | null {
+  for (const segment of path.split("/").filter(Boolean)) {
+    if (/^\d+$/.test(segment)) return segment;
+  }
+  return null;
+}
+
+function collectTravelReferences(
+  value: unknown,
+  targetId: number,
+  path = "",
+  depth = 0,
+  out: TravelReferenceInfo[] = [],
+  unclassified: string[] = [],
+): { classified: TravelReferenceInfo[]; unclassified: string[] } {
+  if (depth > 12 || value === null || value === undefined) return { classified: out, unclassified };
+  if (typeof value === "number") {
+    if (value !== targetId) return { classified: out, unclassified };
+    if (CHARACTER_TRAVEL_PATH.test(path)) {
+      out.push({ planId: travelPlanId(path), role: travelRole(path), path });
+    } else if (unclassified.length < 16) {
+      unclassified.push(path);
+    }
+    return { classified: out, unclassified };
+  }
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      collectTravelReferences(value[index], targetId, `${path}/${index}`, depth + 1, out, unclassified);
+    }
+    return { classified: out, unclassified };
+  }
+  if (typeof value !== "object") return { classified: out, unclassified };
+  for (const [key, child] of Object.entries(value as Obj)) {
+    collectTravelReferences(child, targetId, `${path}/${key}`, depth + 1, out, unclassified);
+  }
+  return { classified: out, unclassified };
+}
+
+function characterAvailability(q: Query, id: number, playerId: number): CharacterAvailabilityInfo {
+  const courtBase = `/living/${id}/court_data`;
+  const employerId = numberOrNull(q.at(`${courtBase}/employer`));
+  const hostId = numberOrNull(q.at(`${courtBase}/host`));
+  const armyId = numberOrNull(q.at(`${courtBase}/army`));
+  const wantsToLeaveCourt = q.at(`${courtBase}/wants_to_leave_court`) === true;
+  const leaveCourtRaw = q.at(`${courtBase}/leave_court_date`);
+  const leaveCourtDate = leaveCourtRaw === undefined ? null : formatCk3Date(leaveCourtRaw);
+
+  const travelRoot = q.at("/travel_plans");
+  const travel = collectTravelReferences(travelRoot, id, "/travel_plans");
+  const unique = new Map<string, TravelReferenceInfo>();
+  for (const reference of travel.classified) {
+    unique.set(`${reference.planId ?? "?"}|${reference.role}|${reference.path}`, reference);
+  }
+  const travelReferences = [...unique.values()].slice(0, 32);
+  const travelling = travelReferences.length > 0;
+  const travelPlanIds = [
+    ...new Set(
+      travelReferences
+        .map((reference) => reference.planId)
+        .filter((planId): planId is string => planId !== null),
+    ),
+  ];
+  const travelRoles = [...new Set(travelReferences.map((reference) => reference.role))];
+
+  let presenceStatus: CharacterPresenceStatus = "unknown";
+  if (travelling) presenceStatus = "travelling";
+  else if (armyId !== null) presenceStatus = "in_army";
+  else if (id === playerId) presenceStatus = "ruler";
+  else if (employerId === playerId) presenceStatus = "at_player_court";
+  else if (hostId === playerId) presenceStatus = "visiting_player_court";
+
+  let councilAvailability: CouncilAvailabilityStatus = "not_evaluated";
+  if (travelling) councilAvailability = "likely_unavailable_travelling";
+  else if (armyId !== null) councilAvailability = "likely_unavailable_in_army";
+
+  return {
+    presenceStatus,
+    councilAvailability,
+    employerId,
+    hostId,
+    armyId,
+    wantsToLeaveCourt,
+    leaveCourtDate,
+    travelling,
+    travelPlanIds,
+    travelRoles,
+    travelReferences,
+    unclassifiedTravelReferencePaths: travel.unclassified.slice(0, 16),
+    source: "court_data_and_travel_plans_best_effort",
+    limitation:
+      "Travel is confirmed only when the character id occurs under a character-like field in serialized travel_plans. Unclassified numeric matches are diagnostic only. Council eligibility still depends on CK3 runtime rules and is not reconstructed here.",
+  };
 }
 
 function countyTitleIdForCouncilTask(q: Query, taskId: number): number | null {
@@ -257,6 +407,7 @@ function toCouncillor(
   q: Query,
   loc: Localizer,
   id: number,
+  playerId: number,
   knownTask: CouncilTaskInfo | null = null,
 ): CouncillorInfo | null {
   const character = extractCharacter(q, loc, id);
@@ -274,6 +425,7 @@ function toCouncillor(
     primaryTitle: character.primaryTitle,
     councilTaskId,
     activeTask: knownTask ?? councilTask(q, loc, storedTaskId),
+    availability: characterAvailability(q, id, playerId),
   };
 }
 
@@ -312,7 +464,7 @@ export function extractCouncil(q: Query, loc: Localizer, candidateLimit = 30): C
     const task = councilTask(q, loc, rawId);
     if (task?.ownerId !== null && task?.ownerId !== undefined) {
       taskIds.push(rawId);
-      const member = toCouncillor(q, loc, task.ownerId, task);
+      const member = toCouncillor(q, loc, task.ownerId, playerId, task);
       if (member && !seenMembers.has(member.id)) {
         seenMembers.add(member.id);
         members.push(member);
@@ -320,7 +472,7 @@ export function extractCouncil(q: Query, loc: Localizer, candidateLimit = 30): C
       continue;
     }
 
-    const member = toCouncillor(q, loc, rawId);
+    const member = toCouncillor(q, loc, rawId, playerId);
     if (member && !seenMembers.has(member.id)) {
       seenMembers.add(member.id);
       members.push(member);
@@ -387,6 +539,7 @@ export function extractCouncil(q: Query, loc: Localizer, candidateLimit = 30): C
       isCouncillor: councillorSet.has(character.id),
       courtStatus: status,
       councilEligibility: councillorSet.has(character.id) ? "current_councillor" : "unknown",
+      availability: characterAvailability(q, character.id, playerId),
     }));
 
   return {
