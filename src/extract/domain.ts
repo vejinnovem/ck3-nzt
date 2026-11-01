@@ -11,10 +11,12 @@ export interface DomainHoldingInfo {
   titleId: number;
   key: string;
   name: string;
+  provinceId: number | null;
   holdingType: string | null;
   holdingTypeName: string | null;
   buildings: DomainBuildingInfo[];
   dataAvailable: boolean;
+  dataSource: "province" | "landed_title_legacy" | "unavailable";
 }
 
 export interface RealmLawInfo {
@@ -68,7 +70,7 @@ export interface RealmEconomyInfo {
 type Obj = Record<string, unknown>;
 
 function numberOrNull(value: unknown): number | null {
-  return typeof value === "number" ? value : null;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function stringOrNull(value: unknown): string | null {
@@ -97,8 +99,6 @@ function localizedKey(loc: Localizer, key: string): string {
   const direct = loc.resolve(key);
   if (direct !== key) return direct;
 
-  // A few CK3 definition families localise their display name under a derived key.
-  // Keep this deliberately small; returning a raw key is safer than inventing a name.
   const candidates = [
     `${key}_name`,
     key.endsWith("_government") ? `${key}_name` : "",
@@ -118,9 +118,13 @@ function titleKey(q: Query, titleId: number): string {
 
 function capitalBaronyForCounty(q: Query, countyId: number, domain: number[]): number | null {
   const explicit = numberOrNull(q.at(`/landed_titles/landed_titles/${countyId}/capital`));
-  // Some current saves expose the county itself in `capital`, so only accept
-  // an explicit value when it actually points to a lower-tier title.
-  if (explicit !== null && explicit !== countyId) return explicit;
+  if (
+    explicit !== null &&
+    explicit !== countyId &&
+    titleTierFromKey(titleKey(q, explicit)) === "barony"
+  ) {
+    return explicit;
+  }
 
   for (const titleId of domain) {
     const key = titleKey(q, titleId);
@@ -134,28 +138,82 @@ function capitalBaronyForCounty(q: Query, countyId: number, domain: number[]): n
 
 function buildingTypes(value: unknown): string[] {
   const result: string[] = [];
-  const add = (entry: unknown): void => {
+  const add = (entry: unknown, depth = 0): void => {
+    if (depth > 3 || entry === null || entry === undefined) return;
     if (typeof entry === "string") {
       result.push(entry);
       return;
     }
+    if (Array.isArray(entry)) {
+      entry.forEach((item) => add(item, depth + 1));
+      return;
+    }
     const record = obj(entry);
-    const type = record ? stringOrNull(record["type"]) : null;
-    if (type) result.push(type);
+    if (!record) return;
+    const type = stringOrNull(record["type"]);
+    if (type) {
+      result.push(type);
+      return;
+    }
+    Object.values(record).forEach((item) => add(item, depth + 1));
   };
 
-  if (Array.isArray(value)) {
-    value.forEach(add);
-  } else {
-    add(value);
-  }
+  add(value);
   return [...new Set(result)];
+}
+
+function provinceRecord(q: Query, provinceId: number): Obj | null {
+  return obj(q.at(`/provinces/${provinceId}`)) ?? obj(q.at(`/provinces/provinces/${provinceId}`));
+}
+
+function provinceIdForBarony(q: Query, titleId: number): number | null {
+  const title = obj(q.at(`/landed_titles/landed_titles/${titleId}`));
+  const candidates = [
+    title ? numberOrNull(title["province"]) : null,
+    title ? numberOrNull(title["capital_province"]) : null,
+    title ? numberOrNull(title["capital"]) : null,
+    titleId,
+  ].filter((value): value is number => value !== null);
+
+  for (const candidate of [...new Set(candidates)]) {
+    if (provinceRecord(q, candidate)) return candidate;
+  }
+
+  const provinces = obj(q.at("/provinces")) ?? obj(q.at("/provinces/provinces"));
+  if (!provinces) return null;
+  for (const [provinceIdText, rawProvince] of Object.entries(provinces)) {
+    const province = obj(rawProvince);
+    if (!province) continue;
+    const linkedTitle =
+      numberOrNull(province["title"]) ??
+      numberOrNull(province["title_id"]) ??
+      numberOrNull(province["barony"]) ??
+      numberOrNull(province["holding_title"]);
+    if (linkedTitle !== titleId) continue;
+    const provinceId = Number(provinceIdText);
+    if (Number.isFinite(provinceId)) return provinceId;
+  }
+  return null;
 }
 
 function extractHolding(q: Query, loc: Localizer, titleId: number): DomainHoldingInfo {
   const key = titleKey(q, titleId);
-  const rawHolding = q.at(`/landed_titles/landed_titles/${titleId}/holding`);
-  const holding = obj(rawHolding);
+  const provinceId = provinceIdForBarony(q, titleId);
+  const province = provinceId === null ? null : provinceRecord(q, provinceId);
+  const provinceHolding = province ? obj(province["holding"]) : null;
+  const provinceItselfIsHolding =
+    province !== null &&
+    (stringOrNull(province["type"]) !== null || province["buildings"] !== undefined)
+      ? province
+      : null;
+  const legacyHolding = obj(q.at(`/landed_titles/landed_titles/${titleId}/holding`));
+  const holding = provinceHolding ?? provinceItselfIsHolding ?? legacyHolding;
+  const dataSource: DomainHoldingInfo["dataSource"] =
+    provinceHolding || provinceItselfIsHolding
+      ? "province"
+      : legacyHolding
+        ? "landed_title_legacy"
+        : "unavailable";
   const holdingType = holding ? stringOrNull(holding["type"]) : null;
   const buildings = holding
     ? buildingTypes(holding["buildings"]).map((type) => ({
@@ -168,10 +226,12 @@ function extractHolding(q: Query, loc: Localizer, titleId: number): DomainHoldin
     titleId,
     key,
     name: resolveTitleName(q, loc, titleId),
+    provinceId,
     holdingType,
     holdingTypeName: holdingType === null ? null : localizedKey(loc, holdingType),
     buildings,
-    dataAvailable: rawHolding !== undefined,
+    dataAvailable: holding !== null,
+    dataSource,
   };
 }
 
@@ -206,8 +266,6 @@ function extractRealmRules(q: Query, loc: Localizer, playerId: number): RealmRul
     ? "save"
     : "unavailable";
 
-  // Tribal authority is specific enough to identify the government even when
-  // the current save version does not serialize a dedicated government field.
   if (!governmentKey && authority?.kind === "tribal") {
     governmentKey = "tribal_government";
     governmentSource = "law_inference";
@@ -266,7 +324,8 @@ export function extractRealmEconomy(q: Query, loc: Localizer): RealmEconomyInfo 
     const countyPath = `/county_manager/counties/${key}`;
     const capitalTitleId = capitalBaronyForCounty(q, titleId, domain);
     const control =
-      numberOrNull(q.at(`${countyPath}/county_control`)) ?? numberOrNull(q.at(`${countyPath}/control`));
+      numberOrNull(q.at(`${countyPath}/county_control`)) ??
+      numberOrNull(q.at(`${countyPath}/control`));
     counties.push({
       titleId,
       key,
