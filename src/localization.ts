@@ -6,8 +6,19 @@ export class Localizer {
   private traitLookup: string[] | null = null;
   private warned = false;
 
-  constructor(gameDir: string | null) {
-    if (gameDir) this.loadDir(join(gameDir, "localization", "english"));
+  constructor(
+    gameDir: string | null,
+    preferredLanguage = process.env.CK3_NZT_LANGUAGE ?? "polish",
+  ) {
+    if (!gameDir) return;
+
+    // English is the stable fallback for missing translation keys. Load it first,
+    // then let the preferred language override matching entries. CK3 ships its
+    // localisation in language-specific directories such as english/ and polish/.
+    this.loadDir(join(gameDir, "localization", "english"));
+    if (preferredLanguage && preferredLanguage !== "english") {
+      this.loadDir(join(gameDir, "localization", preferredLanguage));
+    }
   }
 
   private loadDir(dir: string): void {
@@ -16,7 +27,7 @@ export class Localizer {
       entries = readdirSync(dir);
     } catch {
       return;
-    } // missing dir -> empty map
+    } // missing dir -> keep already loaded fallback entries
     for (const name of entries) {
       const path = join(dir, name);
       let st;
