@@ -81,11 +81,96 @@ export interface Snapshot {
   titles: TitlesInfo;
 }
 
+type Obj = Record<string, unknown>;
+
 function num(v: unknown): number | null {
   return typeof v === "number" ? v : null;
 }
 function str(v: unknown): string {
   return typeof v === "string" ? v : String(v ?? "");
+}
+function obj(v: unknown): Obj | null {
+  return v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : null;
+}
+function numberList(v: unknown): number[] {
+  if (typeof v === "number" && Number.isFinite(v)) return [v];
+  if (!Array.isArray(v)) return [];
+  return v.filter((entry): entry is number => typeof entry === "number" && Number.isFinite(entry));
+}
+
+/**
+ * Build the same best-effort province -> landed-title mapping used by operational-army
+ * extraction. Barony mappings win over county/upper-tier fallbacks when a save exposes
+ * more than one title reference for the same province.
+ */
+function provinceTitleMap(q: Query): Map<number, number> {
+  const result = new Map<number, { titleId: number; score: number }>();
+  const titles = obj(q.at("/landed_titles/landed_titles"));
+  if (!titles) return new Map();
+
+  for (const [idText, rawTitle] of Object.entries(titles)) {
+    const title = obj(rawTitle);
+    const titleId = Number(idText);
+    if (!title || !Number.isFinite(titleId)) continue;
+    const key = typeof title["key"] === "string" ? title["key"] : "";
+    const score = key.startsWith("b_") ? 3 : key.startsWith("c_") ? 2 : 1;
+    for (const field of ["province", "capital_province", "capital"]) {
+      const provinceId = num(title[field]);
+      if (provinceId === null) continue;
+      const existing = result.get(provinceId);
+      if (!existing || score > existing.score) result.set(provinceId, { titleId, score });
+    }
+  }
+
+  return new Map([...result.entries()].map(([provinceId, value]) => [provinceId, value.titleId]));
+}
+
+function titleBelongsToDomain(q: Query, titleId: number, domainIds: Set<number>): boolean {
+  let current: number | null = titleId;
+  for (let depth = 0; depth < 5 && current !== null; depth += 1) {
+    if (domainIds.has(current)) return true;
+    current = num(q.at(`/landed_titles/landed_titles/${current}/de_jure_liege`));
+  }
+  return false;
+}
+
+/**
+ * Raid records identify their target by province ID, while landed_data.domain contains
+ * title IDs. Raw reference matching therefore misses real raids against the player.
+ * Reconcile the two namespaces through the landed-title province mapping and keep the
+ * most relevant raids first in snapshots.
+ */
+export function correctRaidDomainRelevance(q: Query, military: MilitaryInfo): MilitaryInfo {
+  const playerId = num(q.at("/played_character/character"));
+  if (playerId === null || military.raids.source === "unavailable") return military;
+
+  const domainIds = new Set(numberList(q.at(`/living/${playerId}/landed_data/domain`)));
+  if (domainIds.size === 0) return military;
+  const provinceMap = provinceTitleMap(q);
+
+  const records = military.raids.records.map((record) => {
+    const rawProvince = record.fields["province"];
+    const provinceId = typeof rawProvince === "number" && Number.isFinite(rawProvince)
+      ? rawProvince
+      : null;
+    if (provinceId === null) return record;
+    const titleId = provinceMap.get(provinceId);
+    const provinceTargetsDomain =
+      titleId !== undefined && titleBelongsToDomain(q, titleId, domainIds);
+    return provinceTargetsDomain && !record.playerRelevant
+      ? { ...record, playerRelevant: true }
+      : record;
+  });
+
+  records.sort((a, b) => Number(b.playerRelevant) - Number(a.playerRelevant));
+  return {
+    ...military,
+    raids: {
+      ...military.raids,
+      records,
+      playerRelevantCount: records.filter((record) => record.playerRelevant).length,
+    },
+  };
 }
 
 /**
@@ -151,7 +236,10 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
     const economy = extractRealmEconomy(q, loc);
     const council = extractCouncil(q, loc);
     const courtPositions = extractCourtPositions(q, loc);
-    const militaryBase = correctMilitaryLiveFields(q, extractMilitary(q, loc));
+    const militaryBase = correctRaidDomainRelevance(
+      q,
+      correctMilitaryLiveFields(q, extractMilitary(q, loc)),
+    );
     const military: SnapshotMilitaryInfo = {
       ...militaryBase,
       warScoreCapability: {
