@@ -99,3 +99,29 @@ test("follows army.unit for live position, movement, combat and war ids", async 
   expect(hostile?.destinationName).toBe("Poznań");
   expect(hostile?.warIds).toEqual([71]);
 });
+
+test("does not expose a conflicting single-player army aggregate as an exact stack size", async () => {
+  const inconsistent = Buffer.from(
+    GS.toString()
+      .replace("current_strength=1504", "current_strength=2155")
+      .replace(
+        "33554447={ army=33554432 cached={ current=1052 max=1052 }",
+        "33554447={ army=33554432 cached={ current=737 max=737 }",
+      ),
+  );
+
+  const result = await queryGamestate(inconsistent, (q) =>
+    correctOperationalArmiesLiveFields(
+      q,
+      new Localizer(null),
+      extractOperationalArmies(q, new Localizer(null)),
+    ),
+  );
+
+  const player = result.armies.find((army) => army.id === 33554432);
+  expect(player?.currentSoldiers).toBeNull();
+  expect(player?.maxSoldiers).toBeNull();
+  expect(player?.diagnostics?.["soldierCount.regimentAggregateEstimate"]).toBe(1187);
+  expect(player?.diagnostics?.["soldierCount.ownerCurrentStrength"]).toBe(2155);
+  expect(player?.diagnostics?.["soldierCount.reliable"]).toBe(false);
+});
