@@ -27,6 +27,14 @@ async function readHeader(path: string, bytes = 256): Promise<Buffer> {
 export class SaveFileSource implements Source {
   constructor(private opts: { saveDir: string }) {}
 
+  async isTextSave(ref: SaveRef): Promise<boolean> {
+    try {
+      return detectFormat(await readHeader(ref.path)) === "text";
+    } catch {
+      return false;
+    }
+  }
+
   async latest(): Promise<SaveRef | null> {
     let names: string[];
     try {
@@ -38,8 +46,13 @@ export class SaveFileSource implements Source {
     for (const name of names) {
       if (!name.endsWith(".ck3") || name === "last_save.ck3") continue;
       const path = join(this.opts.saveDir, name);
-      const s = await stat(path);
-      candidates.push({ path, mtimeMs: s.mtimeMs });
+      try {
+        const s = await stat(path);
+        candidates.push({ path, mtimeMs: s.mtimeMs });
+      } catch {
+        // CK3 can replace a save between readdir() and stat(); skip that entry
+        // and pick it up on the next watcher/export pass.
+      }
     }
     if (candidates.length === 0) return null;
     candidates.sort((a, b) => b.mtimeMs - a.mtimeMs); // newest first
@@ -48,11 +61,7 @@ export class SaveFileSource implements Source {
     // format regardless of Ironman, and are usually the newest file — picking
     // by mtime alone lets a binary autosave shadow a readable manual save.
     for (const ref of candidates) {
-      try {
-        if (detectFormat(await readHeader(ref.path)) === "text") return ref;
-      } catch {
-        // unreadable (e.g. mid-write) — try the next candidate
-      }
+      if (await this.isTextSave(ref)) return ref;
     }
     // No text save found — fall back to the newest so the caller still surfaces
     // the friendly binary/Ironman message rather than "no save found".
