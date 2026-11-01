@@ -33,8 +33,27 @@ wars={ active_wars={
 } }
 `);
 
+const GS_PRIMARY_REALM = Buffer.from(`
+played_character={ character=100 }
+landed_titles={ landed_titles={
+  10={ key="k_poland" name="Poland" }
+  20={ key="d_polania" name="Polania" holder=100 de_jure_liege=10 }
+  21={ key="c_poznan" name="Poznan" holder=100 de_jure_liege=20 de_facto_liege=20 }
+  60={ key="c_chelmno" name="Chelmno" holder=600 }
+  61={ key="c_kujawy" name="Kujawy" holder=600 de_jure_liege=10 }
+  62={ key="c_dobrzyn" name="Dobrzyn" holder=600 de_jure_liege=10 }
+} }
+living={
+  100={ first_name="Siemowit" landed_data={ domain={ 20 21 } current_strength=2100 strength=2100 } }
+  600={ first_name="Stefan" landed_data={ domain={ 60 61 62 } current_strength=1200 strength=1300 } }
+}
+`);
+
 const run = () =>
   queryGamestate(GS, (q) => extractExpansion(q, new Localizer(null), []));
+
+const runPrimaryRealm = () =>
+  queryGamestate(GS_PRIMARY_REALM, (q) => extractExpansion(q, new Localizer(null), []));
 
 describe("strategic expansion targets", () => {
   it("groups foreign counties in the player's de-jure kingdom by independent realm", async () => {
@@ -64,5 +83,17 @@ describe("strategic expansion targets", () => {
       { side: "attacker", cbType: "conquest_cb", targetTitle: "Szczecin" },
     ]);
     expect(e.strategicTargets.some((t) => t.realmName === "Bohemia")).toBe(false);
+  });
+
+  it("uses the ruler's primary title for realm identity when relevant counties have different roots", async () => {
+    const e = await runPrimaryRealm();
+    expect(e.strategicTargets).toHaveLength(2);
+    expect(e.strategicTargets.every((target) => target.rulerId === 600)).toBe(true);
+    expect(e.strategicTargets.every((target) => target.realmTitleId === 60)).toBe(true);
+    expect(e.strategicTargets.every((target) => target.realmName === "Chelmno")).toBe(true);
+    expect(e.strategicTargets.flatMap((target) => target.relevantTitles.map((title) => title.title))).toEqual([
+      "Kujawy",
+      "Dobrzyn",
+    ]);
   });
 });
