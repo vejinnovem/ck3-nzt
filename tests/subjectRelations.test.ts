@@ -96,3 +96,41 @@ relations={ active_relations={
     evidence: ["cooldown_against_recipient_0.make_clerical_puppet_interaction"],
   });
 });
+
+test("discovers subject contracts nested below the manager when active is empty", async () => {
+  const gs = Buffer.from(`date=883.6.14
+meta_data={ meta_player_name="King" meta_title_name="Poland" meta_player_tier=4 meta_house_name="Piast" }
+played_character={ character=1 player=1 }
+landed_titles={ landed_titles={
+ 10={ key="k_player" holder=1 }
+ 20={ key="c_march" holder=2 }
+} }
+living={
+ 1={ first_name="Siemowit" landed_data={ domain={ 10 } } }
+ 2={ first_name="Mscislav" landed_data={ domain={ 20 } } }
+}
+subject_contracts={
+ active={}
+ contract_database={
+  active_contracts={
+   300={ subject=2 suzerain=1 levels={ 11 12 13 14 } }
+  }
+ }
+}
+`);
+
+  const diplomacy = (await buildSnapshot(gs, new Localizer(null))).diplomacy;
+
+  expect(diplomacy.tributaries).toEqual([
+    {
+      contractId: 300,
+      id: 2,
+      name: "Mscislav",
+      playerRole: "suzerain",
+      independentSubject: true,
+      levels: [11, 12, 13, 14],
+      classificationSource: "independent_subject_contract",
+      evidence: ["subject_contracts.contract_database.active_contracts", "suzerain"],
+    },
+  ]);
+});
