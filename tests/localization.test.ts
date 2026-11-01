@@ -4,10 +4,15 @@ import { Localizer } from "../src/localization.js";
 
 const GAME_DIR = fileURLToPath(new URL("./fixtures/gamedir", import.meta.url));
 
-test("resolve() returns the localized value", () => {
+test("resolve() prefers Polish localization and falls back to English", () => {
   const loc = new Localizer(GAME_DIR);
-  expect(loc.resolve("k_bohemia")).toBe("Bohemia");
+  expect(loc.resolve("k_bohemia")).toBe("Czechy");
   expect(loc.resolve("e_hispania")).toBe("Empire of Hispania");
+});
+
+test("preferred language can be overridden explicitly", () => {
+  const loc = new Localizer(GAME_DIR, "english");
+  expect(loc.resolve("k_bohemia")).toBe("Bohemia");
 });
 
 test("resolve() falls back to the raw key when missing", () => {
@@ -22,7 +27,7 @@ test("a null game dir yields an empty localizer that echoes keys", () => {
 
 test("resolveTrait() maps an index through traits_lookup then localizes", () => {
   const loc = new Localizer(GAME_DIR);
-  loc.setTraitLookup(["just", "diligent"]); // identifiers; "just" -> "Just" via yml
-  expect(loc.resolveTrait(0)).toBe("Just");
-  expect(loc.resolveTrait(99)).toBe("trait_99"); // out of range -> fallback
+  loc.setTraitLookup(["just", "diligent"]);
+  expect(loc.resolveTrait(0)).toBe("Sprawiedliwy");
+  expect(loc.resolveTrait(99)).toBe("trait_99");
 });
