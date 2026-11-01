@@ -64,7 +64,7 @@ export async function watchSaves(pollMs = DEFAULT_POLL_MS): Promise<void> {
   log("CK3-NZT save watcher started. Press Ctrl+C to stop.");
   log("Waiting for a stable manual CK3 save...");
 
-  while (true) {
+  for (;;) {
     const ref = await source.latest();
     if (!ref || !(await source.isTextSave(ref))) {
       if (!announcedWaiting) {
