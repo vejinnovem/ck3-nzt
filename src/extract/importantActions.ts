@@ -200,6 +200,7 @@ function pushUniqueTitle(target: ImportantActionTitleRef[], reference: Important
 
 const CHARACTER_SCOPE_TYPES = new Set(["char", "character"]);
 const TITLE_SCOPE_TYPES = new Set([
+  "lt",
   "title",
   "landed_title",
   "barony",
