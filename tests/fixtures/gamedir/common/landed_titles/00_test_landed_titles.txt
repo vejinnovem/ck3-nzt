@@ -1,0 +1,14 @@
+k_test = {
+  d_test = {
+    c_alpha = {
+      b_alpha = {
+        province = 101
+      }
+    }
+    c_beta = {
+      b_beta = {
+        province = 102
+      }
+    }
+  }
+}
