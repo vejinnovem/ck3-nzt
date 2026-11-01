@@ -228,7 +228,7 @@ export function summarizeSnapshot(snapshot: Snapshot): Record<string, Scalar> {
     "realm.countyCount": snapshot.realm?.countyCount ?? null,
     "realm.playerHeldCountyCount": snapshot.realm?.playerHeldCountyCount ?? countyCount,
     "realm.vassalHeldCountyCount": snapshot.realm?.vassalHeldCountyCount ?? null,
-    "realm.authority": snapshot.economy?.realmRules.authority.key ?? null,
+    "realm.authority": snapshot.economy?.realmRules.authority?.key ?? null,
     "realm.heldCounties": titleSignature(snapshot.titles?.counties),
     "realm.heldDuchies": titleSignature(snapshot.titles?.duchies),
     "succession.titleAssignments": successionAssignmentSignature(snapshot),
