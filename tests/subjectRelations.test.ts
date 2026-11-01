@@ -134,3 +134,36 @@ subject_contracts={
     },
   ]);
 });
+
+test("discovers array-backed contracts under a renamed tributary manager", async () => {
+  const gs = Buffer.from(`date=883.6.14
+meta_data={ meta_player_name="King" meta_title_name="Poland" meta_player_tier=4 meta_house_name="Piast" }
+played_character={ character=1 player=1 }
+landed_titles={ landed_titles={
+ 10={ key="k_player" holder=1 }
+ 20={ key="c_meissen" holder=2 }
+} }
+living={
+ 1={ first_name="Siemowit" landed_data={ domain={ 10 } } }
+ 2={ first_name="Magda" landed_data={ domain={ 20 } } }
+}
+tributary_contract_manager={ entries={
+ { id=400 tributary=2 suzerain=1 levels={ 21 22 23 24 } }
+} }
+`);
+
+  const diplomacy = (await buildSnapshot(gs, new Localizer(null))).diplomacy;
+
+  expect(diplomacy.tributaries).toEqual([
+    {
+      contractId: 400,
+      id: 2,
+      name: "Magda",
+      playerRole: "suzerain",
+      independentSubject: true,
+      levels: [21, 22, 23, 24],
+      classificationSource: "serialized_marker",
+      evidence: ["tributary_contract_manager.entries", "tributary", "suzerain"],
+    },
+  ]);
+});
