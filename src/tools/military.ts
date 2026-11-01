@@ -2,13 +2,17 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { SnapshotCache } from "../cache.js";
 import { stamp, truncate } from "../format.js";
 
+function score(value: number | null): string {
+  return value === null ? "n/a" : value.toFixed(2).replace(/\.00$/, "");
+}
+
 export function registerMilitaryTool(server: McpServer, cache: SnapshotCache) {
   server.registerTool(
     "military",
     {
       title: "Military",
       description:
-        "Player's military strength (levy + total mobilised strength) and ongoing wars (side, casus belli, target, war score). Note: CK3 does not store a men-at-arms breakdown, so only realm totals are shown.",
+        "Player's raw realm mobilisation aggregates and ongoing wars. War data exposes the ticking objective-control component, objective control, and resolved battle/siege result records; it does not claim to expose the full player-visible war score or exact raised-stack size.",
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -22,7 +26,9 @@ export function registerMilitaryTool(server: McpServer, cache: SnapshotCache) {
       const currentStr =
         m.currentStrength !== null ? Math.round(m.currentStrength).toString() : "?";
 
-      let body = `# Military\n- Levy: ${levyStr} | Total strength: ${strengthStr} (current ${currentStr})\n`;
+      let body =
+        `# Military\n- Realm mobilisation aggregate: levy ${levyStr} | ` +
+        `strength ${strengthStr} (current aggregate ${currentStr}; not raised-stack size)\n`;
 
       const { shown, note } = truncate(m.wars, 5);
       if (shown.length === 0) {
@@ -30,12 +36,24 @@ export function registerMilitaryTool(server: McpServer, cache: SnapshotCache) {
       } else {
         body += `## Wars (${m.wars.length})\n`;
         for (const w of shown) {
-          const yourScore = w.playerSide === "attacker" ? w.attackerScore : w.defenderScore;
-          const theirScore = w.playerSide === "attacker" ? w.defenderScore : w.attackerScore;
+          const yourTicking =
+            w.playerSide === "attacker" ? w.attackerTickingWarScore : w.defenderTickingWarScore;
+          const theirTicking =
+            w.playerSide === "attacker" ? w.defenderTickingWarScore : w.attackerTickingWarScore;
+          const youControlAll =
+            w.playerSide === "attacker"
+              ? w.attackerControlsAllObjectives
+              : w.defenderControlsAllObjectives;
+          const theyControlAll =
+            w.playerSide === "attacker"
+              ? w.defenderControlsAllObjectives
+              : w.attackerControlsAllObjectives;
           const target = w.targetTitle ?? "(unknown)";
           body +=
             `- ${w.playerSide.toUpperCase()} vs ${target} — ${w.cbType}, ` +
-            `score you ${yourScore} / them ${theirScore}, since ${w.startDate}\n`;
+            `ticking objective score you ${score(yourTicking)} / them ${score(theirTicking)}, ` +
+            `controls all objectives you ${youControlAll ? "yes" : "no"} / them ${theyControlAll ? "yes" : "no"}, ` +
+            `resolved battle/siege events ${w.warScoreEvents.length}, since ${w.startDate}\n`;
         }
         body += note;
       }
