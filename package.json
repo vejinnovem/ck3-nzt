@@ -36,6 +36,8 @@
     "dev": "tsx src/index.ts",
     "export": "node dist/exporter.js",
     "dev:export": "tsx src/exporter.ts",
+    "watch": "node dist/watcher.js",
+    "dev:watch": "tsx src/watcher.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
