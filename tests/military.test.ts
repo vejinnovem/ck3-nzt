@@ -85,12 +85,37 @@ armies={}
 wars={ active_wars={} }
 `);
 
+const WAR_STATE_GS = Buffer.from(`
+date=871.6.23
+played_character={ character=13015 player=1 }
+living={
+13015={ first_name="Siemowit" playable_data={ knights={} } landed_data={ levy=1212 strength=1715 current_strength=1695 strength_without_hires=1715 } }
+15527={ first_name="Stefan" landed_data={ levy=800 strength=1009 current_strength=1003 strength_without_hires=1009 } }
+}
+landed_titles={ landed_titles={ 3395={ key="c_kujawska" name="Kujawy" } } }
+armies={ armies={} }
+wars={
+active_wars={
+86={
+  start_date=871.1.17
+  casus_belli={ type="county_conquest_cb" attacker=13015 defender=15527 targeted_titles={ 3395 } }
+  attacker={ participants={ { character=13015 } } ticking_war_score=7.5 controls_all=yes }
+  defender={ participants={ { character=15527 } } }
+  battle_results={
+    { province=4918 war_score=12.0 attacker_won=yes attacker_initiated=yes }
+  }
+}
+}
+}
+`);
+
 test("extracts mobilisation totals and the player's war", async () => {
   const snap = await buildSnapshot(GS, new Localizer(null));
   expect(snap.military.levy).toBe(4733.6);
   expect(snap.military.strength).toBe(8098.7);
   expect(snap.military.effectiveStrength).toBeNull();
   expect(snap.military.strengthSource).toBe("landed_data_raw");
+  expect(snap.military.strengthScope).toBe("realm_mobilisation_aggregate_not_stack_size");
   expect(snap.military.champions).toEqual({ ids: [], current: 0, max: null });
   expect(snap.military.menAtArms.source).toBe("unavailable");
   expect(snap.military.rallyPoints.source).toBe("unavailable");
@@ -100,8 +125,33 @@ test("extracts mobilisation totals and the player's war", async () => {
   expect(w.playerSide).toBe("attacker");
   expect(w.cbType).toBe("claim_cb");
   expect(w.targetTitle).toBe("Bohemia"); // title 2 -> name
-  expect(w.attackerScore).toBe(12.5);
-  expect(w.defenderScore).toBe(3.0);
+  expect(w.attackerTickingWarScore).toBe(12.5);
+  expect(w.defenderTickingWarScore).toBe(3.0);
+  expect(w.attackerControlsAllObjectives).toBe(false);
+  expect(w.defenderControlsAllObjectives).toBe(false);
+  expect(w.warScoreEvents).toEqual([]);
+});
+
+test("exports objective control and resolved battle/siege war-score events", async () => {
+  const military = await queryGamestate(WAR_STATE_GS, (q) =>
+    extractMilitary(q, new Localizer(null)),
+  );
+
+  expect(military.wars).toHaveLength(1);
+  const war = military.wars[0]!;
+  expect(war.targetTitle).toBe("Kujawy");
+  expect(war.attackerTickingWarScore).toBe(7.5);
+  expect(war.defenderTickingWarScore).toBeNull();
+  expect(war.attackerControlsAllObjectives).toBe(true);
+  expect(war.defenderControlsAllObjectives).toBe(false);
+  expect(war.warScoreEvents).toEqual([
+    {
+      provinceId: 4918,
+      warScore: 12,
+      attackerWon: true,
+      attackerInitiated: true,
+    },
+  ]);
 });
 
 test("links player Men-at-Arms and derives strength from regiment chunks", async () => {
