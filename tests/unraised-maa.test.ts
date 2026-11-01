@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { fileURLToPath } from "node:url";
 import { queryGamestate } from "../src/parser.js";
 import { Localizer } from "../src/localization.js";
 import { extractMilitary } from "../src/extract/military.js";
@@ -51,4 +52,40 @@ test("recovers persistent Men-at-Arms when no raised army_regiment wrappers exis
   expect(reliability.breakdownReliable).toBe(true);
   expect(reliability.nonLevyNonChampionMaxStrength).toBe(500);
   expect(reliability.discrepancy).toBe(0);
+});
+
+test("recovers unraised Men-at-Arms by origin province when owner is omitted", async () => {
+  const gamestate = Buffer.from(`
+date=875.1.5
+played_character={ character=10 player=1 }
+living={
+ 10={
+  first_name="Ruler"
+  playable_data={ knights={} }
+  landed_data={ domain={ 1 2 } levy=100 strength=200 current_strength=200 strength_without_hires=200 }
+ }
+}
+landed_titles={ landed_titles={
+ 1={ key="d_test" holder=10 }
+ 2={ key="b_alpha" holder=10 }
+}}
+army_regiments={}
+regiments={
+ 501={ type="pikemen" origin=101 size=100 }
+ 502={ type="bowmen" origin=999 size=200 }
+}
+wars={ active_wars={} }
+`);
+  const gameDir = fileURLToPath(new URL("./fixtures/gamedir", import.meta.url));
+  const loc = new Localizer(gameDir);
+  const military = await queryGamestate(gamestate, (q) =>
+    correctMilitaryLiveFields(q, extractMilitary(q, loc), loc),
+  );
+
+  expect(military.menAtArms.slotsUsed).toBe(1);
+  expect(military.menAtArms.totalCurrentSoldiers).toBe(100);
+  expect(military.menAtArms.regiments[0]?.type).toBe("pikemen");
+  expect(military.menAtArms.regiments[0]?.diagnostics).toMatchObject({
+    "standaloneRegiment.ownerInferredFromDomainOrigin": true,
+  });
 });
