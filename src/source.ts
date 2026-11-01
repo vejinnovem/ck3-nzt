@@ -46,8 +46,13 @@ export class SaveFileSource implements Source {
     for (const name of names) {
       if (!name.endsWith(".ck3") || name === "last_save.ck3") continue;
       const path = join(this.opts.saveDir, name);
-      const s = await stat(path);
-      candidates.push({ path, mtimeMs: s.mtimeMs });
+      try {
+        const s = await stat(path);
+        candidates.push({ path, mtimeMs: s.mtimeMs });
+      } catch {
+        // CK3 can replace a save between readdir() and stat(); skip that entry
+        // and pick it up on the next watcher/export pass.
+      }
     }
     if (candidates.length === 0) return null;
     candidates.sort((a, b) => b.mtimeMs - a.mtimeMs); // newest first
