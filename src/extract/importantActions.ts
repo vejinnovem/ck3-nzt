@@ -163,7 +163,7 @@ export function extractImportantActions(
       const id = referenceNumber(record[field], ["title", "landed_title", "county", "id", "value"]);
       if (id === null) continue;
       const key = titleKey(q, id);
-      if (key === null || titleTierFromKey(key) === "unknown") continue;
+      if (key === null || titleTierFromKey(key) === "other") continue;
       titleRefs.push({
         field,
         id,
