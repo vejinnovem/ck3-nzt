@@ -27,6 +27,14 @@ async function readHeader(path: string, bytes = 256): Promise<Buffer> {
 export class SaveFileSource implements Source {
   constructor(private opts: { saveDir: string }) {}
 
+  async isTextSave(ref: SaveRef): Promise<boolean> {
+    try {
+      return detectFormat(await readHeader(ref.path)) === "text";
+    } catch {
+      return false;
+    }
+  }
+
   async latest(): Promise<SaveRef | null> {
     let names: string[];
     try {
@@ -48,11 +56,7 @@ export class SaveFileSource implements Source {
     // format regardless of Ironman, and are usually the newest file — picking
     // by mtime alone lets a binary autosave shadow a readable manual save.
     for (const ref of candidates) {
-      try {
-        if (detectFormat(await readHeader(ref.path)) === "text") return ref;
-      } catch {
-        // unreadable (e.g. mid-write) — try the next candidate
-      }
+      if (await this.isTextSave(ref)) return ref;
     }
     // No text save found — fall back to the newest so the caller still surfaces
     // the friendly binary/Ironman message rather than "no save found".
