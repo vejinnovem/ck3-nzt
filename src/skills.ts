@@ -31,6 +31,8 @@ export interface SnapshotSkillSemantics {
     "family.*.skills",
     "council.members[*].skills",
     "council.candidates[*].skills",
+    "education.children[*].skills",
+    "vassals[*].skills",
     "succession.heirProfiles[*].profile.skills",
   ];
   limitation: string;
@@ -62,6 +64,8 @@ export function snapshotSkillSemantics(): SnapshotSkillSemantics {
       "family.*.skills",
       "council.members[*].skills",
       "council.candidates[*].skills",
+      "education.children[*].skills",
+      "vassals[*].skills",
       "succession.heirProfiles[*].profile.skills",
     ],
     limitation: SKILL_LIMITATION,
