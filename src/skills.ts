@@ -28,7 +28,10 @@ export interface SnapshotSkillSemantics {
   modifierBreakdownAvailable: false;
   affectedFields: readonly [
     "ruler.skills",
-    "family.*.skills",
+    "family.primarySpouse.skills",
+    "family.spouses[*].skills",
+    "family.betrothed.skills",
+    "family.children[*].skills",
     "council.members[*].skills",
     "council.candidates[*].skills",
     "education.children[*].skills",
@@ -61,7 +64,10 @@ export function snapshotSkillSemantics(): SnapshotSkillSemantics {
     modifierBreakdownAvailable: false,
     affectedFields: [
       "ruler.skills",
-      "family.*.skills",
+      "family.primarySpouse.skills",
+      "family.spouses[*].skills",
+      "family.betrothed.skills",
+      "family.children[*].skills",
       "council.members[*].skills",
       "council.candidates[*].skills",
       "education.children[*].skills",

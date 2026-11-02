@@ -13,12 +13,25 @@ const DEFAULT_STABLE_POLLS = 2;
 const RETRY_DELAY_MS = 5000;
 const DEFAULT_UPDATE_CHECK_MS = 5 * 60 * 1000;
 export const AUTO_UPDATE_RESTART_EXIT_CODE = 75;
+export const MAIN_UPDATE_FETCH_ARGS = [
+  "fetch",
+  "origin",
+  "+refs/heads/main:refs/remotes/origin/main",
+  "--quiet",
+] as const;
 
 const execFileAsync = promisify(execFile);
 const PROJECT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 type StabilityAction = "wait" | "process" | "processed";
 type AutoUpdateResult = "current" | "restart" | "skipped";
+type CommandOutput = (command: string, args: string[], cwd: string) => Promise<string>;
+type UpdateSetup = (projectDir: string) => Promise<void>;
+
+export interface SelfUpdateDependencies {
+  commandOutput?: CommandOutput;
+  runUpdateSetup?: UpdateSetup;
+}
 
 export class SaveStabilityTracker {
   private observedSignature: string | null = null;
@@ -104,26 +117,34 @@ async function runUpdateSetup(projectDir: string): Promise<void> {
   });
 }
 
-export async function checkForSelfUpdate(projectDir = PROJECT_DIR): Promise<AutoUpdateResult> {
+export async function checkForSelfUpdate(
+  projectDir = PROJECT_DIR,
+  dependencies: SelfUpdateDependencies = {},
+): Promise<AutoUpdateResult> {
+  const runCommand = dependencies.commandOutput ?? commandOutput;
+  const applyUpdate = dependencies.runUpdateSetup ?? runUpdateSetup;
+
   try {
-    const branch = await commandOutput("git", ["branch", "--show-current"], projectDir);
+    const branch = await runCommand("git", ["branch", "--show-current"], projectDir);
     if (branch !== "main") {
       log(`Auto-update skipped because the current branch is '${branch || "detached HEAD"}'.`);
       return "skipped";
     }
 
-    const dirty = await commandOutput("git", ["status", "--porcelain"], projectDir);
+    const dirty = await runCommand("git", ["status", "--porcelain"], projectDir);
     if (dirty) {
       log("Auto-update skipped because local repository changes are present.");
       return "skipped";
     }
 
-    await commandOutput("git", ["fetch", "origin", "main", "--quiet"], projectDir);
-    const localHead = await commandOutput("git", ["rev-parse", "HEAD"], projectDir);
-    const remoteHead = await commandOutput("git", ["rev-parse", "origin/main"], projectDir);
+    // Update origin/main explicitly. This avoids relying on the caller's remote.fetch
+    // mapping when deciding whether the clean local main is behind GitHub main.
+    await runCommand("git", [...MAIN_UPDATE_FETCH_ARGS], projectDir);
+    const localHead = await runCommand("git", ["rev-parse", "HEAD"], projectDir);
+    const remoteHead = await runCommand("git", ["rev-parse", "origin/main"], projectDir);
     if (localHead === remoteHead) return "current";
 
-    const divergence = await commandOutput(
+    const divergence = await runCommand(
       "git",
       ["rev-list", "--left-right", "--count", "HEAD...origin/main"],
       projectDir,
@@ -141,7 +162,7 @@ export async function checkForSelfUpdate(projectDir = PROJECT_DIR): Promise<Auto
 
     log(`CK3-NZT update available: ${localHead.slice(0, 8)} -> ${remoteHead.slice(0, 8)}.`);
     log("Applying update and rebuilding CK3-NZT...");
-    await runUpdateSetup(projectDir);
+    await applyUpdate(projectDir);
     log("Update installed successfully; watcher will restart.");
     return "restart";
   } catch (error: unknown) {
