@@ -1,6 +1,7 @@
 import type { Query } from "../parser.js";
 import type { Localizer } from "../localization.js";
 import { formatCk3Date } from "../format.js";
+import { resolveDynastyHouseName } from "./characters.js";
 import { forEachRelation } from "./scan.js";
 import { activeSubjectContracts } from "./subjectContracts.js";
 import { resolveTitleName } from "./titleUtils.js";
@@ -67,6 +68,25 @@ export interface PuppetRef {
   evidence: string[];
 }
 
+export type PersonalRelationContext =
+  | "direct_vassal"
+  | "councillor"
+  | "courtier"
+  | "tributary"
+  | "independent_ruler"
+  | "landed";
+
+export interface PersonalRelationRef {
+  id: number;
+  name: string;
+  primaryTitle: string | null;
+  dynastyHouseId: number | null;
+  dynastyHouseName: string | null;
+  relationTypes: string[];
+  contexts: PersonalRelationContext[];
+  evidence: string[];
+}
+
 export interface DiplomacyInfo {
   independent: boolean;
   /** Actual allied rulers/realms. Unlanded relatives used to create the alliance are excluded. */
@@ -79,6 +99,11 @@ export interface DiplomacyInfo {
   tributaryWars: TributaryWarRef[];
   /** Puppet relations involving the player, including the Realm Priest Puppet added in 1.20. */
   puppets: PuppetRef[];
+  /**
+   * Permanent scripted personal relations involving the player (rival/friend/etc.).
+   * Optional for backwards compatibility with stored snapshots created before this field existed.
+   */
+  personalRelations?: PersonalRelationRef[];
 }
 
 const HOSTILE_CAP = 5;
@@ -103,6 +128,32 @@ function asObject(value: unknown): Obj | null {
     : null;
 }
 
+function collectionEntries(value: unknown): Array<[string, Obj]> {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry, index) => {
+      const record = asObject(entry);
+      return record ? [[String(index), record] as [string, Obj]] : [];
+    });
+  }
+  const record = asObject(value);
+  if (!record) return [];
+  return Object.entries(record).flatMap(([key, entry]) => {
+    const child = asObject(entry);
+    return child ? [[key, child] as [string, Obj]] : [];
+  });
+}
+
+function referenceNumber(value: unknown, preferredKeys: string[]): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const record = asObject(value);
+  if (!record) return null;
+  for (const key of preferredKeys) {
+    const candidate = record[key];
+    if (typeof candidate === "number" && Number.isFinite(candidate)) return candidate;
+  }
+  return null;
+}
+
 function hasRealm(q: Query, id: number): boolean {
   const domain = q.at(`/living/${id}/landed_data/domain`);
   return numberList(domain).length > 0;
@@ -114,6 +165,64 @@ function isIndependentRuler(q: Query, id: number): boolean {
   return domain.some(
     (titleId) => q.at(`/landed_titles/landed_titles/${titleId}/de_facto_liege`) === undefined,
   );
+}
+
+function primaryTitleName(q: Query, loc: Localizer, id: number): string | null {
+  const titleId = numberList(q.at(`/living/${id}/landed_data/domain`))[0];
+  return titleId === undefined ? null : resolveTitleName(q, loc, titleId);
+}
+
+function playerCouncilMemberIds(q: Query, playerId: number): Set<number> {
+  const result = new Set<number>();
+  for (const rawId of numberList(q.at(`/living/${playerId}/landed_data/council`))) {
+    const ownerId = referenceNumber(q.at(`/council_task_manager/active/${rawId}/owner`), [
+      "character",
+      "id",
+      "value",
+    ]);
+    if (ownerId !== null) {
+      result.add(ownerId);
+      continue;
+    }
+    if (q.at(`/living/${rawId}/first_name`) !== undefined) result.add(rawId);
+  }
+  return result;
+}
+
+function isDirectVassal(q: Query, playerId: number, otherId: number): boolean {
+  const playerTitles = new Set(numberList(q.at(`/living/${playerId}/landed_data/domain`)));
+  if (playerTitles.size === 0) return false;
+  return numberList(q.at(`/living/${otherId}/landed_data/domain`)).some((titleId) => {
+    const liegeId = referenceNumber(q.at(`/landed_titles/landed_titles/${titleId}/de_facto_liege`), [
+      "title",
+      "landed_title",
+      "id",
+      "value",
+    ]);
+    return liegeId !== null && playerTitles.has(liegeId);
+  });
+}
+
+function personalRelationContexts(
+  q: Query,
+  playerId: number,
+  otherId: number,
+  councilIds: Set<number>,
+  tributaryIds: Set<number>,
+): PersonalRelationContext[] {
+  const contexts: PersonalRelationContext[] = [];
+  if (isDirectVassal(q, playerId, otherId)) contexts.push("direct_vassal");
+  if (councilIds.has(otherId)) contexts.push("councillor");
+  if (
+    referenceNumber(q.at(`/living/${otherId}/court_data/employer`), ["character", "id", "value"]) ===
+    playerId
+  ) {
+    contexts.push("courtier");
+  }
+  if (tributaryIds.has(otherId)) contexts.push("tributary");
+  if (isIndependentRuler(q, otherId)) contexts.push("independent_ruler");
+  else if (hasRealm(q, otherId)) contexts.push("landed");
+  return contexts;
 }
 
 function collectMarkerPaths(
@@ -195,9 +304,6 @@ function puppetType(evidence: string[]): PuppetRef["type"] {
 function extractPuppets(q: Query, playerId: number): PuppetRef[] {
   const result = new Map<string, PuppetRef>();
 
-  // Some newer relation types are serialized directly on the character. Prefer these
-  // because the direction is unambiguous: a puppet reference on the player means the
-  // player is the puppeteer.
   const playerRaw = q.at(`/living/${playerId}`);
   for (const ref of collectMarkedCharacterRefs(playerRaw, PUPPET_PATTERN)) {
     if (!hasRealm(q, ref.id) && q.at(`/living/${ref.id}/first_name`) === undefined) continue;
@@ -213,11 +319,6 @@ function extractPuppets(q: Query, playerId: number): PuppetRef[] {
     result.set(`${item.id}:${item.type}:${item.playerRole}`, item);
   }
 
-  // Scripted relations can also be stored in the pairwise relation manager. Capture
-  // relation names such as theological_agent_puppet even when Paradox moves the
-  // underlying serialization between patches. The make_clerical_puppet interaction
-  // cooldown is also enough to classify the counterpart as a realm-priest puppet type,
-  // while direction remains unknown unless an authoritative character marker exists.
   forEachRelation(q, playerId, (otherId, entry) => {
     const evidence = collectMarkerPaths(entry, PUPPET_PATTERN);
     if (evidence.length === 0) return;
@@ -268,10 +369,6 @@ function extractTributaries(q: Query, playerId: number): TributaryRef[] {
     const independentSubject = isIndependentRuler(q, subjectId);
     const explicitTributaryMarker = evidence.some((path) => /tribut/i.test(path));
 
-    // CK3 1.20 uses the generic SubjectContract system for tributaries. Even if the
-    // contract has no literal "tributary" key in the save, the subject remains an
-    // independent ruler, unlike a normal vassal. That distinction is stable and is
-    // therefore a useful fallback classifier.
     if (!explicitTributaryMarker && !independentSubject) continue;
 
     const otherId = subjectId === playerId ? liegeId : subjectId;
@@ -353,7 +450,9 @@ function extractTributaryWars(
     });
   }
 
-  return result.sort((a, b) => (a.warId ?? Number.MAX_SAFE_INTEGER) - (b.warId ?? Number.MAX_SAFE_INTEGER));
+  return result.sort(
+    (a, b) => (a.warId ?? Number.MAX_SAFE_INTEGER) - (b.warId ?? Number.MAX_SAFE_INTEGER),
+  );
 }
 
 function collectAllianceThroughIds(value: unknown, out = new Set<number>()): number[] {
@@ -373,10 +472,66 @@ function collectAllianceThroughIds(value: unknown, out = new Set<number>()): num
   return [...out];
 }
 
+function extractPersonalRelations(
+  q: Query,
+  loc: Localizer,
+  playerId: number,
+  tributaries: TributaryRef[],
+): PersonalRelationRef[] {
+  const byId = new Map<
+    number,
+    { relationTypes: Set<string>; evidence: Set<string> }
+  >();
+
+  for (const [entryId, entry] of collectionEntries(q.at("/opinions/active_opinions"))) {
+    const owner = referenceNumber(entry["owner"], ["character", "id", "value"]);
+    const target = referenceNumber(entry["target"], ["character", "id", "value"]);
+    if (owner === null || target === null) continue;
+    if (owner !== playerId && target !== playerId) continue;
+    const otherId = owner === playerId ? target : owner;
+    if (otherId === playerId) continue;
+
+    const scripted = asObject(entry["scripted_relations"]);
+    if (!scripted) continue;
+    const current = byId.get(otherId) ?? {
+      relationTypes: new Set<string>(),
+      evidence: new Set<string>(),
+    };
+    for (const relationType of Object.keys(scripted)) {
+      current.relationTypes.add(relationType);
+      current.evidence.add(
+        `opinions.active_opinions.${entryId}.scripted_relations.${relationType}`,
+      );
+    }
+    byId.set(otherId, current);
+  }
+
+  const councilIds = playerCouncilMemberIds(q, playerId);
+  const tributaryIds = new Set(tributaries.map((tributary) => tributary.id));
+  return [...byId.entries()]
+    .map(([id, relation]) => {
+      const dynastyHouseRaw = q.at(`/living/${id}/dynasty_house`);
+      const dynastyHouseId =
+        typeof dynastyHouseRaw === "number" && Number.isFinite(dynastyHouseRaw)
+          ? dynastyHouseRaw
+          : null;
+      return {
+        id,
+        name: resolveCharName(q, id),
+        primaryTitle: primaryTitleName(q, loc, id),
+        dynastyHouseId,
+        dynastyHouseName: resolveDynastyHouseName(q, loc, dynastyHouseId),
+        relationTypes: [...relation.relationTypes].sort(),
+        contexts: personalRelationContexts(q, playerId, id, councilIds, tributaryIds),
+        evidence: [...relation.evidence].sort(),
+      };
+    })
+    .sort((a, b) => a.id - b.id);
+}
+
 export function extractDiplomacy(q: Query, loc: Localizer): DiplomacyInfo {
   const playerId = q.at("/played_character/character") as number;
 
-  // Independent: domain[0] has no de_facto_liege on the title
   const domain = (q.at(`/living/${playerId}/landed_data/domain`) as number[] | undefined) ?? [];
   const primaryId: number | undefined = domain[0];
   const independent =
@@ -389,9 +544,6 @@ export function extractDiplomacy(q: Query, loc: Localizer): DiplomacyInfo {
   const truces: TruceRef[] = [];
 
   forEachRelation(q, playerId, (otherId, entry) => {
-    // CK3 can mark both the allied ruler and unlanded family members used to create
-    // that alliance with `alliances`. An alliance is between rulers, so expose only
-    // the landed counterpart while retaining the marriage/betrothal participants.
     if (entry["alliances"] != null && hasRealm(q, otherId) && !allianceIds.has(otherId)) {
       allianceIds.add(otherId);
       alliances.push({
@@ -400,7 +552,6 @@ export function extractDiplomacy(q: Query, loc: Localizer): DiplomacyInfo {
         throughCharacterIds: collectAllianceThroughIds(entry["alliances"]),
       });
     }
-    // Truces — emit at most ONE per relation entry (prefer truce_0, fall back to truce_1)
     const truceSlot =
       (entry["truce_0"] as Record<string, unknown> | undefined) ??
       (entry["truce_1"] as Record<string, unknown> | undefined);
@@ -414,7 +565,6 @@ export function extractDiplomacy(q: Query, loc: Localizer): DiplomacyInfo {
     }
   });
 
-  // Single pass over active_opinions: sum temporary_opinion.value per owner (of the player)
   const activeOpinions =
     (q.at("/opinions/active_opinions") as Record<string, unknown>[] | undefined) ?? [];
 
@@ -430,7 +580,6 @@ export function extractDiplomacy(q: Query, loc: Localizer): DiplomacyInfo {
     opinionMap.set(owner, (opinionMap.get(owner) ?? 0) + value);
   }
 
-  // Take the N most-negative (hostile) owners; filter to negative only
   const hostile: ThreatRef[] = Array.from(opinionMap.entries())
     .filter(([, opinion]) => opinion < 0)
     .sort(([, a], [, b]) => a - b)
@@ -446,5 +595,6 @@ export function extractDiplomacy(q: Query, loc: Localizer): DiplomacyInfo {
     tributaries,
     tributaryWars: extractTributaryWars(q, loc, tributaries),
     puppets: extractPuppets(q, playerId),
+    personalRelations: extractPersonalRelations(q, loc, playerId, tributaries),
   };
 }

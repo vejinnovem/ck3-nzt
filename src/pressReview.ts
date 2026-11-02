@@ -209,6 +209,118 @@ function reviewFamily(previous: Snapshot, current: Snapshot, items: PressReviewI
   }
 }
 
+function reviewTributaryMembership(
+  previous: Snapshot,
+  current: Snapshot,
+  items: PressReviewItem[],
+): void {
+  const key = (tributary: Snapshot["diplomacy"]["tributaries"][number]) =>
+    `${tributary.playerRole}:${tributary.id}`;
+  const before = new Map((previous.diplomacy?.tributaries ?? []).map((entry) => [key(entry), entry]));
+  const after = new Map((current.diplomacy?.tributaries ?? []).map((entry) => [key(entry), entry]));
+
+  for (const [entryKey, tributary] of after) {
+    const old = before.get(entryKey);
+    if (!old) {
+      items.push({
+        category: "diplomacy",
+        priority: "informational",
+        summary:
+          tributary.playerRole === "suzerain"
+            ? `New tributary: ${tributary.name} (character ${tributary.id}).`
+            : `New suzerain: ${tributary.name} (character ${tributary.id}).`,
+        actorIds: [tributary.id],
+      });
+      continue;
+    }
+
+    const oldLevels = [...old.levels].sort((a, b) => a - b).join(",");
+    const newLevels = [...tributary.levels].sort((a, b) => a - b).join(",");
+    if (oldLevels !== newLevels) {
+      items.push({
+        category: "diplomacy",
+        priority: "watch",
+        summary: `Tributary contract levels changed for ${tributary.name} (character ${tributary.id}): [${oldLevels}] -> [${newLevels}].`,
+        actorIds: [tributary.id],
+      });
+    }
+  }
+
+  for (const [entryKey, tributary] of before) {
+    if (after.has(entryKey)) continue;
+    items.push({
+      category: "diplomacy",
+      priority: "watch",
+      summary:
+        tributary.playerRole === "suzerain"
+          ? `Tributary lost: ${tributary.name} (character ${tributary.id}).`
+          : `Suzerain relation ended: ${tributary.name} (character ${tributary.id}).`,
+      actorIds: [tributary.id],
+    });
+  }
+}
+
+function personalRelationLabel(
+  relation: NonNullable<Snapshot["diplomacy"]["personalRelations"]>[number],
+): string {
+  return `${relation.name}${relation.primaryTitle ? ` (${relation.primaryTitle})` : ""}, character ${relation.id}`;
+}
+
+function reviewPersonalRelations(
+  previous: Snapshot,
+  current: Snapshot,
+  items: PressReviewItem[],
+): void {
+  const before = new Map((previous.diplomacy?.personalRelations ?? []).map((entry) => [entry.id, entry]));
+  const after = new Map((current.diplomacy?.personalRelations ?? []).map((entry) => [entry.id, entry]));
+
+  for (const [id, relation] of after) {
+    const oldTypes = new Set(before.get(id)?.relationTypes ?? []);
+    for (const relationType of relation.relationTypes) {
+      if (oldTypes.has(relationType)) continue;
+      const hostile = /rival|nemesis|enemy/i.test(relationType);
+      items.push({
+        category: "diplomacy",
+        priority: hostile ? "watch" : "informational",
+        summary: `Personal relation gained: ${personalRelationLabel(relation)} -> ${relationType}.`,
+        actorIds: [id],
+      });
+    }
+  }
+
+  for (const [id, relation] of before) {
+    const currentTypes = new Set(after.get(id)?.relationTypes ?? []);
+    for (const relationType of relation.relationTypes) {
+      if (currentTypes.has(relationType)) continue;
+      items.push({
+        category: "diplomacy",
+        priority: "informational",
+        summary: `Personal relation ended: ${personalRelationLabel(relation)} -> ${relationType}.`,
+        actorIds: [id],
+      });
+    }
+  }
+}
+
+function reviewExpansionWarnings(
+  previous: Snapshot,
+  current: Snapshot,
+  items: PressReviewItem[],
+): void {
+  const before = new Set(
+    (previous.expansion?.tributaryTruceWarnings ?? []).map((warning) => warning.targetRulerId),
+  );
+  for (const warning of current.expansion?.tributaryTruceWarnings ?? []) {
+    if (before.has(warning.targetRulerId)) continue;
+    items.push({
+      category: "diplomacy",
+      priority: "action_required",
+      summary: warning.summary,
+      actorIds: [warning.targetRulerId],
+    });
+  }
+}
+
 function reviewDiplomacy(previous: Snapshot, current: Snapshot, items: PressReviewItem[]): void {
   const beforeAllies = new Map((previous.diplomacy?.alliances ?? []).map((ally) => [ally.id, ally]));
   const afterAllies = new Map((current.diplomacy?.alliances ?? []).map((ally) => [ally.id, ally]));
@@ -256,6 +368,10 @@ function reviewDiplomacy(previous: Snapshot, current: Snapshot, items: PressRevi
       actorIds: [truce.id],
     });
   }
+
+  reviewTributaryMembership(previous, current, items);
+  reviewPersonalRelations(previous, current, items);
+  reviewExpansionWarnings(previous, current, items);
 }
 
 function reviewFactions(previous: Snapshot, current: Snapshot, items: PressReviewItem[]): void {
