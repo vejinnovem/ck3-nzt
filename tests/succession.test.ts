@@ -103,5 +103,60 @@ dead_unprunable={
     },
   ]);
   expect(succession.risk.currentHeldTitleSplitRisk).toBe(false);
-  expect(succession.risk.confederateEqualRankTitleCreationRiskEvaluated).toBe(false);
+  expect(succession.risk.creatableEqualRankSplitRisk).toBe(false);
+  expect(succession.risk.confederateEqualRankTitleCreationRiskEvaluated).toBe(true);
+});
+
+test("flags an uncreated equal-rank duchy when the realm holds more than half its de-jure counties", async () => {
+  const gs = Buffer.from(`
+date=900.1.1
+played_character={ character=1 player=1 }
+landed_titles={
+landed_titles={
+100={ key="d_primary" name="Primary" holder=1 heir={ 2 } }
+101={ key="c_capital" name="Capital" holder=1 de_jure_liege=100 de_facto_liege=100 heir={ 2 } }
+200={ key="d_second" name="Second" }
+201={ key="c_second_a" name="Second A" holder=1 de_jure_liege=200 de_facto_liege=100 heir={ 2 } }
+202={ key="c_second_b" name="Second B" holder=3 de_jure_liege=200 de_facto_liege=100 heir={ 3 } }
+203={ key="c_second_c" name="Second C" holder=4 de_jure_liege=200 }
+}
+}
+living={
+1={
+  first_name="Ruler"
+  family_data={ child={ 2 5 } }
+  landed_data={
+    domain={ 100 101 201 }
+    realm_capital=101
+    laws={ "confederate_partition_succession_law" "male_preference_law" }
+    succession={ 2 5 }
+  }
+}
+2={ first_name="ElderSon" skill={ 1 1 1 1 1 1 } }
+3={ first_name="Vassal" skill={ 1 1 1 1 1 1 } }
+4={ first_name="ForeignRuler" skill={ 1 1 1 1 1 1 } }
+5={ first_name="YoungerSon" skill={ 1 1 1 1 1 1 } }
+}
+`);
+
+  const succession = await queryGamestate(gs, (q) =>
+    extractSuccession(q, new Localizer(null)),
+  );
+
+  expect(succession.risk.currentHeldTitleSplitRisk).toBe(false);
+  expect(succession.risk.creatableEqualRankSplitRisk).toBe(true);
+  expect(succession.risk.confederateEqualRankTitleCreationRiskEvaluated).toBe(true);
+  expect(succession.risk.creatableEqualRankCandidates).toEqual([
+    expect.objectContaining({
+      titleId: 200,
+      title: "Second",
+      key: "d_second",
+      tier: "duchy",
+      deJureCountyCount: 3,
+      realmHeldDeJureCountyCount: 2,
+      landThresholdMet: true,
+      specialCreationRulesEvaluated: false,
+    }),
+  ]);
+  expect(succession.risk.limitation).toContain("best-effort");
 });
