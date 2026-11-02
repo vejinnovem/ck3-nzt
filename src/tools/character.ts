@@ -4,6 +4,7 @@ import type { SnapshotCache } from "../cache.js";
 import { extractCharacter, findCharacters } from "../extract/characters.js";
 import { resolveTitleName } from "../extract/titleUtils.js";
 import { healthSemantics } from "../health.js";
+import { skillSemantics } from "../skills.js";
 import { stamp, truncate } from "../format.js";
 
 export function registerCharacterTools(server: McpServer, cache: SnapshotCache) {
@@ -69,8 +70,8 @@ export function registerCharacterTools(server: McpServer, cache: SnapshotCache) 
       title: "Character",
       description:
         "Detailed dossier for one character by id — needs an id; use `find_character` if you only have a name. " +
-        "Traits, skills, gold/prestige/piety, serialized health scalar/stress, primary title, and claims " +
-        "(pressed/unpressed; CK3 does not store strong/weak). The health scalar is not claimed to be UI-equivalent effective health.",
+        "Traits, serialized save skills, gold/prestige/piety, serialized health scalar/stress, primary title, and claims " +
+        "(pressed/unpressed; CK3 does not store strong/weak). Serialized skills and health are not claimed to be UI-equivalent effective values.",
       inputSchema: { id: z.number().describe("character id, e.g. from find_character") },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -100,12 +101,15 @@ export function registerCharacterTools(server: McpServer, cache: SnapshotCache) 
         c.claims.length > 0
           ? c.claims.map((cl) => `${cl.title} (${cl.pressed ? "pressed" : "unpressed"})`).join(", ")
           : "none";
+      const skills = skillSemantics(c.skills);
       const health = healthSemantics(c.health);
 
       const body =
         `# ${c.name} (id ${c.id})\n` +
         `- Primary title: ${c.primaryTitle ?? "none"}\n` +
-        `- Skills: ${skillLine}\n` +
+        `- Skills (serialized save values): ${skillLine}\n` +
+        `- Effective/UI-equivalent skills: unavailable\n` +
+        `- Skill limitation: ${skills.limitation}\n` +
         `- Traits: ${traitsLine}\n` +
         `- Gold: ${c.gold ?? "?"} | Prestige: ${c.prestige ?? "?"} | Piety: ${c.piety ?? "?"}\n` +
         `- Health (serialized save scalar): ${health.rawSaveValue ?? "?"} | Effective/UI-equivalent health: unavailable | Stress: ${c.stress ?? "?"}\n` +
