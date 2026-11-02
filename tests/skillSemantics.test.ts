@@ -47,7 +47,10 @@ test("snapshot metadata covers every exported character skill field", () => {
   expect(semantics.effectiveAvailable).toBe(false);
   expect(semantics.affectedFields).toEqual([
     "ruler.skills",
-    "family.*.skills",
+    "family.primarySpouse.skills",
+    "family.spouses[*].skills",
+    "family.betrothed.skills",
+    "family.children[*].skills",
     "council.members[*].skills",
     "council.candidates[*].skills",
     "education.children[*].skills",
