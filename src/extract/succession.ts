@@ -64,9 +64,30 @@ export interface HeirTitleAssignment {
   titles: Array<Pick<TitleInheritance, "titleId" | "title" | "key" | "tier">>;
 }
 
+export interface CreatableEqualRankTitleCandidate {
+  titleId: number;
+  title: string;
+  key: string;
+  tier: TitleTier;
+  holderId: null;
+  deJureCountyCount: number;
+  realmHeldDeJureCountyCount: number;
+  realmHeldDeJureCountyFraction: number;
+  /** CK3 Confederate Partition uses a more-than-half de-jure land condition. */
+  landThresholdMet: boolean;
+  /** Extra title-specific/scripted requirements are deliberately not reconstructed. */
+  specialCreationRulesEvaluated: false;
+}
+
 export interface SuccessionRisk {
   currentHeldTitleSplitRisk: boolean;
   currentHeldTitleSplitReason: string | null;
+  /**
+   * Best-effort risk from currently unheld titles of the primary title's rank that
+   * Confederate Partition could create. Null means the case could not be evaluated.
+   */
+  creatableEqualRankSplitRisk: boolean | null;
+  creatableEqualRankCandidates: CreatableEqualRankTitleCandidate[];
   confederateEqualRankTitleCreationRiskEvaluated: boolean;
   limitation: string | null;
 }
@@ -90,15 +111,40 @@ export interface SuccessionInfo {
 
 const HEIR_CAP = 6;
 const CLAIMANT_CAP = 6;
+const REALM_GRAPH_DEPTH = 16;
+
+type Obj = Record<string, unknown>;
+
+function obj(value: unknown): Obj | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Obj)
+    : null;
+}
 
 function numberOrNull(v: unknown): number | null {
-  return typeof v === "number" ? v : null;
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
 function numberList(v: unknown): number[] {
-  if (typeof v === "number") return [v];
+  if (typeof v === "number" && Number.isFinite(v)) return [v];
   if (!Array.isArray(v)) return [];
-  return v.filter((item): item is number => typeof item === "number");
+  return v.filter((item): item is number => typeof item === "number" && Number.isFinite(item));
+}
+
+function titleReference(value: unknown): number | null {
+  const direct = numberOrNull(value);
+  if (direct !== null) return direct;
+  const record = obj(value);
+  if (!record) return null;
+  for (const key of ["title", "landed_title", "id", "value"]) {
+    const nested = numberOrNull(record[key]);
+    if (nested !== null) return nested;
+  }
+  return null;
+}
+
+function titleKey(title: Obj | null): string {
+  return title && typeof title["key"] === "string" ? title["key"] : "";
 }
 
 function characterBasePath(q: Query, id: number): string | null {
@@ -287,6 +333,115 @@ function groupTitleAssignments(
   );
 }
 
+function pathReachesTitle(
+  titles: Obj,
+  startTitleId: number,
+  targetTitleIds: Set<number>,
+  relation: "de_facto_liege" | "de_jure_liege",
+): boolean {
+  const visited = new Set<number>();
+  let current: number | null = startTitleId;
+  for (let depth = 0; depth < REALM_GRAPH_DEPTH && current !== null; depth += 1) {
+    if (targetTitleIds.has(current)) return true;
+    if (visited.has(current)) return false;
+    visited.add(current);
+    const title = obj(titles[String(current)]);
+    if (!title) return false;
+    current = titleReference(title[relation]);
+  }
+  return false;
+}
+
+function playerRealmCountyIds(titles: Obj, playerHeldTitleIds: Set<number>): Set<number> {
+  const result = new Set<number>();
+  for (const [idText, rawTitle] of Object.entries(titles)) {
+    const titleId = Number(idText);
+    const title = obj(rawTitle);
+    if (!Number.isFinite(titleId) || !title) continue;
+    if (titleTierFromKey(titleKey(title)) !== "county") continue;
+    if (pathReachesTitle(titles, titleId, playerHeldTitleIds, "de_facto_liege")) {
+      result.add(titleId);
+    }
+  }
+  return result;
+}
+
+function deJureCountyIds(titles: Obj, ancestorTitleId: number): number[] {
+  const target = new Set([ancestorTitleId]);
+  const result: number[] = [];
+  for (const [idText, rawTitle] of Object.entries(titles)) {
+    const countyId = Number(idText);
+    const title = obj(rawTitle);
+    if (!Number.isFinite(countyId) || !title) continue;
+    if (titleTierFromKey(titleKey(title)) !== "county") continue;
+    if (countyId === ancestorTitleId) {
+      result.push(countyId);
+      continue;
+    }
+    if (pathReachesTitle(titles, countyId, target, "de_jure_liege")) result.push(countyId);
+  }
+  return result.sort((a, b) => a - b);
+}
+
+function supportsConfederateCreationEvaluation(tier: TitleTier): boolean {
+  return tier === "duchy" || tier === "kingdom" || tier === "empire";
+}
+
+function creatableEqualRankCandidates(
+  q: Query,
+  loc: Localizer,
+  playerId: number,
+  primaryTier: TitleTier,
+  domain: number[],
+): CreatableEqualRankTitleCandidate[] | null {
+  const titles = obj(q.at("/landed_titles/landed_titles"));
+  if (!titles || !supportsConfederateCreationEvaluation(primaryTier)) return null;
+
+  const playerHeldTitleIds = new Set(domain);
+  for (const [idText, rawTitle] of Object.entries(titles)) {
+    const titleId = Number(idText);
+    const title = obj(rawTitle);
+    if (!Number.isFinite(titleId) || !title) continue;
+    if (numberOrNull(title["holder"]) === playerId) playerHeldTitleIds.add(titleId);
+  }
+  const realmCounties = playerRealmCountyIds(titles, playerHeldTitleIds);
+  const candidates: CreatableEqualRankTitleCandidate[] = [];
+
+  for (const [idText, rawTitle] of Object.entries(titles)) {
+    const titleId = Number(idText);
+    const title = obj(rawTitle);
+    if (!Number.isFinite(titleId) || !title || playerHeldTitleIds.has(titleId)) continue;
+    const key = titleKey(title);
+    if (!key || titleTierFromKey(key) !== primaryTier) continue;
+    if (numberOrNull(title["holder"]) !== null) continue;
+
+    const counties = deJureCountyIds(titles, titleId);
+    if (counties.length === 0) continue;
+    const realmHeldCount = counties.filter((countyId) => realmCounties.has(countyId)).length;
+    const fraction = realmHeldCount / counties.length;
+    const landThresholdMet = realmHeldCount * 2 > counties.length;
+    if (!landThresholdMet) continue;
+
+    candidates.push({
+      titleId,
+      title: resolveTitleName(q, loc, titleId),
+      key,
+      tier: primaryTier,
+      holderId: null,
+      deJureCountyCount: counties.length,
+      realmHeldDeJureCountyCount: realmHeldCount,
+      realmHeldDeJureCountyFraction: fraction,
+      landThresholdMet,
+      specialCreationRulesEvaluated: false,
+    });
+  }
+
+  return candidates.sort((a, b) => {
+    const fractionDiff = b.realmHeldDeJureCountyFraction - a.realmHeldDeJureCountyFraction;
+    return fractionDiff !== 0 ? fractionDiff : a.title.localeCompare(b.title);
+  });
+}
+
 export function extractSuccession(q: Query, loc: Localizer): SuccessionInfo {
   const playerId = q.at("/played_character/character") as number;
   const landedData = `/living/${playerId}/landed_data`;
@@ -351,6 +506,23 @@ export function extractSuccession(q: Query, loc: Localizer): SuccessionInfo {
       tierRank(title.tier) >= tierRank(primaryTier),
   );
   const isConfederatePartition = successionLaw.includes("confederate_partition");
+  const creationCandidates = isConfederatePartition
+    ? creatableEqualRankCandidates(q, loc, playerId, primaryTier, domain)
+    : [];
+  const creationRiskEvaluated = creationCandidates !== null;
+  const creatableEqualRankSplitRisk = !isConfederatePartition
+    ? false
+    : !creationRiskEvaluated
+      ? null
+      : successionIds.length < 2
+        ? false
+        : creationCandidates.length > 0;
+
+  const creationLimitation = isConfederatePartition
+    ? !creationRiskEvaluated
+      ? "Confederate Partition is active, but equal-rank creation risk could not be evaluated because the primary tier or landed-title graph is unsupported/unavailable."
+      : "Creatable equal-rank title risk uses the save's succession queue plus serialized de-jure/de-facto title graphs and the Confederate Partition more-than-half de-jure county rule. Title-specific scripted creation restrictions, special governments, title laws and runtime-only exceptions are not reconstructed, so candidates are best-effort rather than guaranteed creations."
+    : null;
 
   return {
     primaryTitle,
@@ -372,10 +544,10 @@ export function extractSuccession(q: Query, loc: Localizer): SuccessionInfo {
         splitTitle === undefined
           ? null
           : `${splitTitle.heirName ?? splitTitle.heirId} is currently the save-computed heir to ${splitTitle.title}, which is ${splitTitle.tier}-rank while the primary title is ${primaryTier}-rank.`,
-      confederateEqualRankTitleCreationRiskEvaluated: !isConfederatePartition,
-      limitation: isConfederatePartition
-        ? "Current held-title heirs come directly from the save. Confederate Partition can also create eligible equal-rank titles on succession; that creation risk is not yet reconstructed from static de-jure/game-rule data."
-        : null,
+      creatableEqualRankSplitRisk,
+      creatableEqualRankCandidates: creationCandidates ?? [],
+      confederateEqualRankTitleCreationRiskEvaluated: creationRiskEvaluated,
+      limitation: creationLimitation,
     },
   };
 }
