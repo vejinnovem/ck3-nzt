@@ -3,6 +3,7 @@ import type { Localizer } from "../localization.js";
 import { formatCk3Date } from "../format.js";
 import { forEachRelation } from "./scan.js";
 import { activeSubjectContracts } from "./subjectContracts.js";
+import { resolveTitleName } from "./titleUtils.js";
 
 export interface DipRef {
   id: number;
@@ -38,6 +39,23 @@ export interface TributaryRef {
   evidence: string[];
 }
 
+export interface TributaryWarRef {
+  warId: number | null;
+  startDate: string | null;
+  cbType: string | null;
+  targetTitleIds: number[];
+  targetTitles: string[];
+  attackerIds: number[];
+  attackerNames: string[];
+  defenderIds: number[];
+  defenderNames: string[];
+  playerTributaryAttackerIds: number[];
+  playerTributaryDefenderIds: number[];
+  /** True when at least one of the player's tributaries fights on each side. */
+  betweenPlayerTributaries: boolean;
+  classification: "between_player_tributaries" | "player_tributary_vs_external";
+}
+
 export interface PuppetRef {
   id: number;
   name: string;
@@ -57,6 +75,8 @@ export interface DiplomacyInfo {
   hostile: ThreatRef[]; // top-N lowest summed opinion of the player
   /** Independent subjects tied to the player by a CK3 subject contract. */
   tributaries: TributaryRef[];
+  /** Every serialized active war involving at least one of the player's tributaries. */
+  tributaryWars: TributaryWarRef[];
   /** Puppet relations involving the player, including the Realm Priest Puppet added in 1.20. */
   puppets: PuppetRef[];
 }
@@ -272,6 +292,70 @@ function extractTributaries(q: Query, playerId: number): TributaryRef[] {
   return result.sort((a, b) => a.id - b.id || a.contractId - b.contractId);
 }
 
+function participantIds(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  const ids = value.flatMap((entry): number[] => {
+    const record = asObject(entry);
+    const id = record?.["character"];
+    return typeof id === "number" && Number.isFinite(id) ? [id] : [];
+  });
+  return [...new Set(ids)];
+}
+
+function extractTributaryWars(
+  q: Query,
+  loc: Localizer,
+  tributaries: TributaryRef[],
+): TributaryWarRef[] {
+  const playerTributaryIds = new Set(
+    tributaries.filter((tributary) => tributary.playerRole === "suzerain").map((tributary) => tributary.id),
+  );
+  if (playerTributaryIds.size === 0) return [];
+
+  const activeWars = asObject(q.at("/wars/active_wars"));
+  if (!activeWars) return [];
+
+  const result: TributaryWarRef[] = [];
+  for (const [warIdText, rawWar] of Object.entries(activeWars)) {
+    const war = asObject(rawWar);
+    if (!war) continue;
+    const attacker = asObject(war["attacker"]);
+    const defender = asObject(war["defender"]);
+    const attackerIds = participantIds(attacker?.["participants"]);
+    const defenderIds = participantIds(defender?.["participants"]);
+    const playerTributaryAttackerIds = attackerIds.filter((id) => playerTributaryIds.has(id));
+    const playerTributaryDefenderIds = defenderIds.filter((id) => playerTributaryIds.has(id));
+    if (playerTributaryAttackerIds.length === 0 && playerTributaryDefenderIds.length === 0) continue;
+
+    const cb = asObject(war["casus_belli"]);
+    const targetTitleIds = numberList(cb?.["targeted_titles"]);
+    const betweenPlayerTributaries =
+      playerTributaryAttackerIds.length > 0 && playerTributaryDefenderIds.length > 0;
+    const startDateRaw = war["start_date"];
+
+    result.push({
+      warId: Number.isFinite(Number(warIdText)) ? Number(warIdText) : null,
+      startDate:
+        startDateRaw === undefined || startDateRaw === null ? null : formatCk3Date(startDateRaw),
+      cbType: typeof cb?.["type"] === "string" ? cb["type"] : null,
+      targetTitleIds,
+      targetTitles: targetTitleIds.map((titleId) => resolveTitleName(q, loc, titleId)),
+      attackerIds,
+      attackerNames: attackerIds.map((id) => resolveCharName(q, id)),
+      defenderIds,
+      defenderNames: defenderIds.map((id) => resolveCharName(q, id)),
+      playerTributaryAttackerIds,
+      playerTributaryDefenderIds,
+      betweenPlayerTributaries,
+      classification: betweenPlayerTributaries
+        ? "between_player_tributaries"
+        : "player_tributary_vs_external",
+    });
+  }
+
+  return result.sort((a, b) => (a.warId ?? Number.MAX_SAFE_INTEGER) - (b.warId ?? Number.MAX_SAFE_INTEGER));
+}
+
 function collectAllianceThroughIds(value: unknown, out = new Set<number>()): number[] {
   if (Array.isArray(value)) {
     for (const item of value) collectAllianceThroughIds(item, out);
@@ -290,7 +374,6 @@ function collectAllianceThroughIds(value: unknown, out = new Set<number>()): num
 }
 
 export function extractDiplomacy(q: Query, loc: Localizer): DiplomacyInfo {
-  void loc; // reserved for future localisation
   const playerId = q.at("/played_character/character") as number;
 
   // Independent: domain[0] has no de_facto_liege on the title
@@ -354,12 +437,14 @@ export function extractDiplomacy(q: Query, loc: Localizer): DiplomacyInfo {
     .slice(0, HOSTILE_CAP)
     .map(([id, opinion]) => ({ id, name: resolveCharName(q, id), opinion }));
 
+  const tributaries = extractTributaries(q, playerId);
   return {
     independent,
     alliances,
     truces,
     hostile,
-    tributaries: extractTributaries(q, playerId),
+    tributaries,
+    tributaryWars: extractTributaryWars(q, loc, tributaries),
     puppets: extractPuppets(q, playerId),
   };
 }
