@@ -42,7 +42,7 @@ test("serialized character skills remain explicitly non-UI-equivalent", async ()
   expect(semantics.limitation).toContain("do not treat serialized skill values as effective skills");
 });
 
-test("snapshot metadata covers ruler, family, council and succession skill fields", () => {
+test("snapshot metadata covers every exported character skill field", () => {
   const semantics = snapshotSkillSemantics();
   expect(semantics.effectiveAvailable).toBe(false);
   expect(semantics.affectedFields).toEqual([
@@ -50,6 +50,8 @@ test("snapshot metadata covers ruler, family, council and succession skill field
     "family.*.skills",
     "council.members[*].skills",
     "council.candidates[*].skills",
+    "education.children[*].skills",
+    "vassals[*].skills",
     "succession.heirProfiles[*].profile.skills",
   ]);
 
