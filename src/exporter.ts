@@ -3,14 +3,26 @@ import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getBuildInfo } from "./buildInfo.js";
+import { formatProgress, type ConsoleTone } from "./consoleUi.js";
 import { resolveConfig, discoverGameDir, discoverSaveDir } from "./config.js";
 import { extractGamestate, IronmanError } from "./envelope.js";
 import { attachRulerHealthSemantics } from "./health.js";
 import { Localizer } from "./localization.js";
 import { persistSnapshot } from "./memory.js";
+import { augmentChangesWithPressReview } from "./pressReview.js";
 import { attachSnapshotSkillSemantics } from "./skills.js";
 import { buildSnapshot } from "./snapshot.js";
 import { SaveFileSource } from "./source.js";
+
+export interface ExportProgressEvent {
+  date: string | null;
+  message: string;
+  tone?: ConsoleTone;
+}
+
+export interface ExportLatestOptions {
+  onProgress?: (event: ExportProgressEvent) => void;
+}
 
 function achievementLabel(value: boolean | null | undefined): string {
   if (value === true) return "ENABLED";
@@ -18,7 +30,15 @@ function achievementLabel(value: boolean | null | undefined): string {
   return "UNKNOWN";
 }
 
-export async function exportLatest(): Promise<void> {
+function emitProgress(options: ExportLatestOptions, event: ExportProgressEvent): void {
+  if (options.onProgress) {
+    options.onProgress(event);
+    return;
+  }
+  console.log(formatProgress(event.date, event.message, event.tone ?? "info"));
+}
+
+export async function exportLatest(options: ExportLatestOptions = {}): Promise<void> {
   const cfg = resolveConfig();
   const saveDir = cfg.saveDir ?? (await discoverSaveDir());
   if (!saveDir) {
@@ -29,41 +49,76 @@ export async function exportLatest(): Promise<void> {
   const ref = await source.latest();
   if (!ref) throw new Error("No CK3 save found. Make a normal save and try again.");
 
+  emitProgress(options, { date: null, message: `Reading ${basename(ref.path)}...`, tone: "info" });
   const save = await source.read(ref);
+
+  emitProgress(options, { date: null, message: "Extracting gamestate...", tone: "muted" });
   const gamestate = extractGamestate(save);
   const gameDir = cfg.gameDir ?? (await discoverGameDir());
+
+  emitProgress(options, {
+    date: null,
+    message: "Parsing ruler / realm / military / diplomacy / succession...",
+    tone: "info",
+  });
   const snapshot = attachSnapshotSkillSemantics(
     attachRulerHealthSemantics(await buildSnapshot(gamestate, new Localizer(gameDir))),
   );
   const build = getBuildInfo();
   Object.assign(snapshot, { build });
 
-  // Deliberately print only the save filename, not the absolute path, so the
-  // confirmation is useful without exposing the local Windows username/path.
-  console.log(
-    `Read save: ${basename(ref.path)} | game date: ${snapshot.date} | ruler: ${snapshot.overview.rulerName} | title: ${snapshot.overview.primaryTitle}`,
-  );
-  console.log(`CK3-NZT build: ${build.buildId} | branch: ${build.gitBranch ?? "?"} | dirty: ${build.gitDirty ?? "?"}`);
-  console.log(`Achievements: ${achievementLabel(snapshot.game?.achievementsEligible)}`);
+  emitProgress(options, {
+    date: snapshot.date,
+    message: `${snapshot.overview.rulerName} | ${snapshot.overview.primaryTitle} | build ${build.buildId}`,
+    tone: "info",
+  });
+  emitProgress(options, {
+    date: snapshot.date,
+    message: `Achievements: ${achievementLabel(snapshot.game?.achievementsEligible)}`,
+    tone: snapshot.game?.achievementsEligible === false ? "warning" : "muted",
+  });
 
   // Intentionally excludes the absolute save path and Windows username.
   const sourceFingerprint = createHash("sha256")
     .update(`${ref.mtimeMs}:${save.length}:${snapshot.date}:${snapshot.overview.primaryTitle}`)
     .digest("hex");
 
+  emitProgress(options, {
+    date: snapshot.date,
+    message: "Computing changes / writing AI export...",
+    tone: "info",
+  });
   const result = await persistSnapshot(snapshot, { sourceFingerprint });
+  const pressReviewCount = await augmentChangesWithPressReview(
+    result.databasePath,
+    result.outputDir,
+    sourceFingerprint,
+  );
 
   if (result.written) {
-    console.log(
-      `CK3-NZT snapshot ${snapshot.date} stored (${result.changeCount} strategic changes).`,
-    );
+    emitProgress(options, {
+      date: snapshot.date,
+      message: `Export complete: ${result.changeCount} changes, ${pressReviewCount} news.`,
+      tone: "success",
+    });
   } else if (result.refreshed) {
-    console.log(`CK3-NZT snapshot ${snapshot.date} was already stored; AI export refreshed.`);
+    emitProgress(options, {
+      date: snapshot.date,
+      message: `Export refreshed: ${result.changeCount} changes, ${pressReviewCount} news.`,
+      tone: "success",
+    });
   } else {
-    console.log(`CK3-NZT is already up to date for ${snapshot.date}.`);
+    emitProgress(options, {
+      date: snapshot.date,
+      message: `Already current: ${pressReviewCount} news in press review.`,
+      tone: "muted",
+    });
   }
-  console.log(`AI export: ${result.outputDir}`);
-  console.log(`Memory DB: ${result.databasePath}`);
+
+  if (!options.onProgress) {
+    console.log(`AI export: ${result.outputDir}`);
+    console.log(`Memory DB: ${result.databasePath}`);
+  }
 }
 
 async function main(): Promise<void> {

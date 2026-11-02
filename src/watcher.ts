@@ -4,8 +4,14 @@ import { stat } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import {
+  formatProgress,
+  formatStatus,
+  highlightSaveFilename,
+  type ConsoleTone,
+} from "./consoleUi.js";
 import { resolveConfig, discoverSaveDir } from "./config.js";
-import { exportLatest } from "./exporter.js";
+import { exportLatest, type ExportProgressEvent } from "./exporter.js";
 import { SaveFileSource } from "./source.js";
 
 const DEFAULT_POLL_MS = 1000;
@@ -61,8 +67,20 @@ function timestamp(): string {
   return new Date().toLocaleTimeString(undefined, { hour12: false });
 }
 
-function log(message: string): void {
-  console.log(`[${timestamp()}] ${message}`);
+function log(message: string, tone: ConsoleTone = "info"): void {
+  console.log(`[${timestamp()}] ${formatStatus(message, tone)}`);
+}
+
+function logDetectedSave(filename: string): void {
+  console.log(
+    `[${timestamp()}] ${formatStatus("Save detected:", "info")} ${highlightSaveFilename(filename)}`,
+  );
+}
+
+function logExportProgress(event: ExportProgressEvent): void {
+  console.log(
+    `[${timestamp()}] ${formatProgress(event.date, event.message, event.tone ?? "info")}`,
+  );
 }
 
 function sleep(ms: number): Promise<void> {
@@ -127,13 +145,13 @@ export async function checkForSelfUpdate(
   try {
     const branch = await runCommand("git", ["branch", "--show-current"], projectDir);
     if (branch !== "main") {
-      log(`Auto-update skipped because the current branch is '${branch || "detached HEAD"}'.`);
+      log(`Auto-update skipped: current branch is '${branch || "detached HEAD"}'.`, "warning");
       return "skipped";
     }
 
     const dirty = await runCommand("git", ["status", "--porcelain"], projectDir);
     if (dirty) {
-      log("Auto-update skipped because local repository changes are present.");
+      log("Auto-update skipped: local repository changes are present.", "warning");
       return "skipped";
     }
 
@@ -155,21 +173,23 @@ export async function checkForSelfUpdate(
 
     if (!Number.isFinite(ahead) || !Number.isFinite(behind) || ahead !== 0 || behind <= 0) {
       log(
-        `Auto-update skipped because local main is not a clean fast-forward of origin/main (${divergence}).`,
+        `Auto-update skipped: local main is not a clean fast-forward (${divergence}).`,
+        "warning",
       );
       return "skipped";
     }
 
-    log(`CK3-NZT update available: ${localHead.slice(0, 8)} -> ${remoteHead.slice(0, 8)}.`);
-    log("Applying update and rebuilding CK3-NZT...");
+    log(`Update available: ${localHead.slice(0, 8)} -> ${remoteHead.slice(0, 8)}.`, "warning");
+    log("Applying update and rebuilding CK3-NZT...", "info");
     await applyUpdate(projectDir);
-    log("Update installed successfully; watcher will restart.");
+    log("Update installed; watcher will restart.", "success");
     return "restart";
   } catch (error: unknown) {
     log(
-      `Auto-update check failed; watcher will keep running and retry later: ${
+      `Auto-update check failed; retrying later: ${
         error instanceof Error ? error.message : String(error)
       }`,
+      "warning",
     );
     return "skipped";
   }
@@ -192,9 +212,9 @@ export async function watchSaves(
   let announcedWaiting = false;
   let nextUpdateCheckAt = 0;
 
-  log("CK3-NZT save watcher started. Press Ctrl+C to stop.");
-  log("Auto-update is enabled for a clean local main branch.");
-  log("Waiting for a stable manual CK3 save...");
+  log("CK3-NZT watcher started. Ctrl+C stops it.", "success");
+  log("Auto-update: clean local main only.", "muted");
+  log("Waiting for a stable manual CK3 save...", "muted");
 
   for (;;) {
     if (Date.now() >= nextUpdateCheckAt) {
@@ -205,7 +225,7 @@ export async function watchSaves(
     const ref = await source.latest();
     if (!ref || !(await source.isTextSave(ref))) {
       if (!announcedWaiting) {
-        log("No parseable manual save found yet; binary autosaves are ignored.");
+        log("No parseable manual save yet; binary autosaves are ignored.", "muted");
         announcedWaiting = true;
       }
       await sleep(pollMs);
@@ -238,20 +258,21 @@ export async function watchSaves(
       // exported with a parser version that already has a newer main available.
       if ((await checkForSelfUpdate()) === "restart") return "restart";
 
-      log(`Stable save detected: ${basename(ref.path)}`);
-      await exportLatest();
+      logDetectedSave(basename(ref.path));
+      await exportLatest({ onProgress: logExportProgress });
       tracker.markProcessed(signature);
       retrySignature = null;
       retryAfter = 0;
       nextUpdateCheckAt = Date.now() + updateCheckMs;
-      log("Export complete; watcher is waiting for the next save.");
+      log("Waiting for the next save.", "muted");
     } catch (error: unknown) {
       retrySignature = signature;
       retryAfter = Date.now() + RETRY_DELAY_MS;
       log(
-        `Export failed; will retry if the save remains current: ${
+        `Export failed; retrying if this save stays current: ${
           error instanceof Error ? error.message : String(error)
         }`,
+        "error",
       );
     }
 
@@ -264,7 +285,7 @@ async function main(): Promise<void> {
     const result = await watchSaves();
     if (result === "restart") process.exitCode = AUTO_UPDATE_RESTART_EXIT_CODE;
   } catch (error: unknown) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(formatStatus(error instanceof Error ? error.message : String(error), "error"));
     process.exitCode = 1;
   }
 }
