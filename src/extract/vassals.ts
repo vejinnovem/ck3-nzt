@@ -229,8 +229,7 @@ export function extractVassals(
       id: vassalId,
       strength: strengthForLiege(q, vassalId),
       powerValue: num(q.at(`/living/${vassalId}/landed_data/vassal_power_value`)),
-      serializedPowerful:
-        typeof rawPowerful === "boolean" ? rawPowerful : rawPowerful === true ? true : null,
+      serializedPowerful: typeof rawPowerful === "boolean" ? rawPowerful : null,
     });
   };
 
@@ -303,7 +302,11 @@ export function extractVassals(
       ? []
       : [...entries]
           .filter((entry) => entry.powerValue !== null)
-          .sort((a, b) => (b.powerValue ?? Number.NEGATIVE_INFINITY) - (a.powerValue ?? Number.NEGATIVE_INFINITY))
+          .sort(
+            (a, b) =>
+              (b.powerValue ?? Number.NEGATIVE_INFINITY) -
+              (a.powerValue ?? Number.NEGATIVE_INFINITY),
+          )
           .slice(0, Math.min(5, total))
           .map((entry) => entry.id),
   );
@@ -351,39 +354,43 @@ export function extractVassals(
 
   // 7. Build final vassal list with political status, skills and held counties. This
   // keeps granted frontier counties visible after they leave the player's personal domain.
-  const vassals = topEntries.map(({ id, strength, powerValue, serializedPowerful }) => {
-    const character = extractCharacter(q, loc, id);
-    const raw = q.at(`/living/${id}/first_name`);
-    const name = character?.name ?? (typeof raw === "string" ? raw : String(raw ?? id));
-    const councilSeat = councilSet.has(id);
-    const powerfulVassal = hasSerializedPowerful
-      ? serializedPowerful === true
-      : fallbackPowerfulIds.has(id);
-    const opinionModifiers = modifierMap.get(id) ?? [];
-    return {
-      id,
-      name,
-      dynastyHouseId: character?.dynastyHouseId ?? null,
-      dynastyHouseName: character?.dynastyHouseName ?? null,
-      age: character?.age ?? null,
-      primaryTitle: character?.primaryTitle ?? null,
-      skills: character?.skills ?? null,
-      strengthForLiege: strength,
-      vassalPowerValue: powerValue,
-      powerfulVassal,
-      powerfulVassalSource: hasSerializedPowerful
+  const vassals: VassalInfo[] = topEntries.map(
+    ({ id, strength, powerValue, serializedPowerful }) => {
+      const character = extractCharacter(q, loc, id);
+      const raw = q.at(`/living/${id}/first_name`);
+      const name = character?.name ?? (typeof raw === "string" ? raw : String(raw ?? id));
+      const councilSeat = councilSet.has(id);
+      const powerfulVassal = hasSerializedPowerful
+        ? serializedPowerful === true
+        : fallbackPowerfulIds.has(id);
+      const opinionModifiers = modifierMap.get(id) ?? [];
+      const powerfulVassalSource: PowerfulVassalSource = hasSerializedPowerful
         ? "serialized_flag"
-        : "vassal_power_value_rank_fallback",
-      powerfulVassalWithoutCouncilSeat: powerfulVassal && !councilSeat,
-      opinion: opinionMap.has(id) ? opinionMap.get(id)! : null,
-      opinionSource:
-        opinionModifiers.length > 0 ? "serialized_temporary_modifiers_only" : "unavailable",
-      opinionModifiers,
-      scriptedRelations: [...(scriptedRelationMap.get(id) ?? new Set<string>())].sort(),
-      councilSeat,
-      inFaction: factionMemberIds.has(id),
-      counties: countyContextsHeldBy(q, loc, id),
-    };
-  });
+        : "vassal_power_value_rank_fallback";
+      const opinionSource: VassalOpinionSource =
+        opinionModifiers.length > 0 ? "serialized_temporary_modifiers_only" : "unavailable";
+      return {
+        id,
+        name,
+        dynastyHouseId: character?.dynastyHouseId ?? null,
+        dynastyHouseName: character?.dynastyHouseName ?? null,
+        age: character?.age ?? null,
+        primaryTitle: character?.primaryTitle ?? null,
+        skills: character?.skills ?? null,
+        strengthForLiege: strength,
+        vassalPowerValue: powerValue,
+        powerfulVassal,
+        powerfulVassalSource,
+        powerfulVassalWithoutCouncilSeat: powerfulVassal && !councilSeat,
+        opinion: opinionMap.has(id) ? opinionMap.get(id)! : null,
+        opinionSource,
+        opinionModifiers,
+        scriptedRelations: [...(scriptedRelationMap.get(id) ?? new Set<string>())].sort(),
+        councilSeat,
+        inFaction: factionMemberIds.has(id),
+        counties: countyContextsHeldBy(q, loc, id),
+      };
+    },
+  );
   return { vassals, total };
 }
