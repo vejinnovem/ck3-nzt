@@ -27,19 +27,17 @@ test("self-update explicitly refreshes origin/main and restarts when clean main 
   const projectDir = "C:\\CK3-NZT\\app";
   const localHead = "1111111111111111111111111111111111111111";
   const remoteHead = "2222222222222222222222222222222222222222";
-  const commandOutput = vi.fn(
-    async (_command: string, args: string[], _cwd: string): Promise<string> => {
-      const key = args.join(" ");
-      if (key === "branch --show-current") return "main";
-      if (key === "status --porcelain") return "";
-      if (key === MAIN_UPDATE_FETCH_ARGS.join(" ")) return "";
-      if (key === "rev-parse HEAD") return localHead;
-      if (key === "rev-parse origin/main") return remoteHead;
-      if (key === "rev-list --left-right --count HEAD...origin/main") return "0 1";
-      throw new Error(`Unexpected git command: ${key}`);
-    },
-  );
-  const runUpdateSetup = vi.fn(async (_projectDir: string): Promise<void> => undefined);
+  const commandOutput = vi.fn(async (_command: string, args: string[]): Promise<string> => {
+    const key = args.join(" ");
+    if (key === "branch --show-current") return "main";
+    if (key === "status --porcelain") return "";
+    if (key === MAIN_UPDATE_FETCH_ARGS.join(" ")) return "";
+    if (key === "rev-parse HEAD") return localHead;
+    if (key === "rev-parse origin/main") return remoteHead;
+    if (key === "rev-list --left-right --count HEAD...origin/main") return "0 1";
+    throw new Error(`Unexpected git command: ${key}`);
+  });
+  const runUpdateSetup = vi.fn(async (): Promise<void> => undefined);
 
   await expect(
     checkForSelfUpdate(projectDir, { commandOutput, runUpdateSetup }),
