@@ -1,5 +1,6 @@
 import type { Query } from "../parser.js";
 import type { Localizer } from "../localization.js";
+import { formatCk3Date } from "../format.js";
 import { extractCharacter, type CharacterInfo } from "./characters.js";
 import {
   countyContextsHeldBy,
@@ -20,6 +21,18 @@ export interface FactionInfo {
   leaderDynastyHouseName: string | null;
   titleMembers: CountyContextInfo[];
 }
+
+export interface VassalOpinionModifier {
+  modifier: string | null;
+  value: number;
+  startDate: string | null;
+  expirationDate: string | null;
+  convergingOpinion: number | null;
+}
+
+export type PowerfulVassalSource = "serialized_flag" | "vassal_power_value_rank_fallback";
+export type VassalOpinionSource = "serialized_temporary_modifiers_only" | "unavailable";
+
 export interface VassalInfo {
   id: number;
   name: string;
@@ -31,8 +44,18 @@ export interface VassalInfo {
   strengthForLiege: number;
   vassalPowerValue: number | null;
   powerfulVassal: boolean;
+  /** How powerfulVassal was determined. Current campaign saves can omit the UI flag. */
+  powerfulVassalSource: PowerfulVassalSource;
   powerfulVassalWithoutCouncilSeat: boolean;
+  /**
+   * Sum of serialized temporary opinion modifiers only. CK3 computes the full UI opinion
+   * at runtime from traits, title desires, legitimacy, council expectations and other data.
+   */
   opinion: number | null;
+  opinionSource: VassalOpinionSource;
+  opinionModifiers: VassalOpinionModifier[];
+  /** Permanent relationship tags serialized alongside opinion records (friend/rival/etc.). */
+  scriptedRelations: string[];
   councilSeat: boolean;
   inFaction: boolean;
   counties: CountyContextInfo[];
@@ -46,6 +69,11 @@ function obj(v: unknown): Record<string, unknown> | null {
   return v !== null && typeof v === "object" && !Array.isArray(v)
     ? (v as Record<string, unknown>)
     : null;
+}
+
+function dateOrNull(v: unknown): string | null {
+  if (v === undefined || v === null) return null;
+  return formatCk3Date(v);
 }
 
 function numberList(v: unknown): number[] {
@@ -187,11 +215,23 @@ export function extractVassals(
 ): { vassals: VassalInfo[]; total: number } {
   const playerId = q.at("/played_character/character") as number;
 
-  type VassalEntry = { id: number; strength: number };
+  type VassalEntry = {
+    id: number;
+    strength: number;
+    powerValue: number | null;
+    serializedPowerful: boolean | null;
+  };
   const byId = new Map<number, VassalEntry>();
   const addVassal = (vassalId: number): void => {
     if (vassalId === playerId || byId.has(vassalId)) return;
-    byId.set(vassalId, { id: vassalId, strength: strengthForLiege(q, vassalId) });
+    const rawPowerful = q.at(`/living/${vassalId}/landed_data/is_powerful_vassal`);
+    byId.set(vassalId, {
+      id: vassalId,
+      strength: strengthForLiege(q, vassalId),
+      powerValue: num(q.at(`/living/${vassalId}/landed_data/vassal_power_value`)),
+      serializedPowerful:
+        typeof rawPowerful === "boolean" ? rawPowerful : rawPowerful === true ? true : null,
+    });
   };
 
   // 1. Preferred source: contract IDs referenced by the player.
@@ -253,33 +293,73 @@ export function extractVassals(
   const topEntries = entries.slice(0, topN);
   const topIds = new Set(topEntries.map((e) => e.id));
 
+  // CK3 normally has five powerful vassals. Some current live saves do not serialize
+  // is_powerful_vassal even though the UI clearly identifies them. When no positive
+  // serialized flag exists, reproduce the UI ranking from vassal_power_value. This is
+  // deliberately marked as a fallback rather than pretending it is a native flag.
+  const hasSerializedPowerful = entries.some((entry) => entry.serializedPowerful === true);
+  const fallbackPowerfulIds = new Set(
+    hasSerializedPowerful
+      ? []
+      : [...entries]
+          .filter((entry) => entry.powerValue !== null)
+          .sort((a, b) => (b.powerValue ?? Number.NEGATIVE_INFINITY) - (a.powerValue ?? Number.NEGATIVE_INFINITY))
+          .slice(0, Math.min(5, total))
+          .map((entry) => entry.id),
+  );
+
   // 5. Current saves store council task IDs in landed_data/council. Resolve each task's
   // owner rather than comparing vassal character IDs to task IDs.
   const councilSet = playerCouncilMemberIds(q, playerId);
 
-  // 6. Single pass over active_opinions — accumulate only for topN vassals targeting player
+  // 6. Single pass over active_opinions. These records contain temporary modifiers and
+  // scripted relationship tags, not the complete player-visible opinion number.
   const activeOpinions =
     (q.at("/opinions/active_opinions") as Record<string, unknown>[] | undefined) ?? [];
   const opinionMap = new Map<number, number>();
+  const modifierMap = new Map<number, VassalOpinionModifier[]>();
+  const scriptedRelationMap = new Map<number, Set<string>>();
   for (const entry of activeOpinions) {
     if (!entry || typeof entry !== "object") continue;
     if ((entry["target"] as number | undefined) !== playerId) continue;
     const owner = entry["owner"] as number | undefined;
     if (typeof owner !== "number" || !topIds.has(owner)) continue;
-    const tempOpinion = entry["temporary_opinion"] as Record<string, unknown> | undefined;
-    const value = tempOpinion?.["value"];
-    if (typeof value !== "number") continue;
-    opinionMap.set(owner, (opinionMap.get(owner) ?? 0) + value);
+
+    const tempOpinion = obj(entry["temporary_opinion"]);
+    const value = num(tempOpinion?.["value"]);
+    if (tempOpinion && value !== null) {
+      opinionMap.set(owner, (opinionMap.get(owner) ?? 0) + value);
+      const converging = obj(tempOpinion["converging"]);
+      const list = modifierMap.get(owner) ?? [];
+      list.push({
+        modifier: typeof tempOpinion["modifier"] === "string" ? tempOpinion["modifier"] : null,
+        value,
+        startDate: dateOrNull(tempOpinion["start_date"]),
+        expirationDate: dateOrNull(tempOpinion["expiration_date"]),
+        convergingOpinion: num(converging?.["opinion"]),
+      });
+      modifierMap.set(owner, list);
+    }
+
+    const scriptedRelations = obj(entry["scripted_relations"]);
+    if (scriptedRelations) {
+      const set = scriptedRelationMap.get(owner) ?? new Set<string>();
+      for (const relation of Object.keys(scriptedRelations)) set.add(relation);
+      scriptedRelationMap.set(owner, set);
+    }
   }
 
   // 7. Build final vassal list with political status, skills and held counties. This
   // keeps granted frontier counties visible after they leave the player's personal domain.
-  const vassals = topEntries.map(({ id, strength }) => {
+  const vassals = topEntries.map(({ id, strength, powerValue, serializedPowerful }) => {
     const character = extractCharacter(q, loc, id);
     const raw = q.at(`/living/${id}/first_name`);
     const name = character?.name ?? (typeof raw === "string" ? raw : String(raw ?? id));
     const councilSeat = councilSet.has(id);
-    const powerfulVassal = q.at(`/living/${id}/landed_data/is_powerful_vassal`) === true;
+    const powerfulVassal = hasSerializedPowerful
+      ? serializedPowerful === true
+      : fallbackPowerfulIds.has(id);
+    const opinionModifiers = modifierMap.get(id) ?? [];
     return {
       id,
       name,
@@ -289,10 +369,17 @@ export function extractVassals(
       primaryTitle: character?.primaryTitle ?? null,
       skills: character?.skills ?? null,
       strengthForLiege: strength,
-      vassalPowerValue: num(q.at(`/living/${id}/landed_data/vassal_power_value`)),
+      vassalPowerValue: powerValue,
       powerfulVassal,
+      powerfulVassalSource: hasSerializedPowerful
+        ? "serialized_flag"
+        : "vassal_power_value_rank_fallback",
       powerfulVassalWithoutCouncilSeat: powerfulVassal && !councilSeat,
       opinion: opinionMap.has(id) ? opinionMap.get(id)! : null,
+      opinionSource:
+        opinionModifiers.length > 0 ? "serialized_temporary_modifiers_only" : "unavailable",
+      opinionModifiers,
+      scriptedRelations: [...(scriptedRelationMap.get(id) ?? new Set<string>())].sort(),
       councilSeat,
       inFaction: factionMemberIds.has(id),
       counties: countyContextsHeldBy(q, loc, id),
