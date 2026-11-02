@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { SnapshotCache } from "../cache.js";
 import { extractCharacter, findCharacters } from "../extract/characters.js";
 import { resolveTitleName } from "../extract/titleUtils.js";
+import { healthSemantics } from "../health.js";
 import { stamp, truncate } from "../format.js";
 
 export function registerCharacterTools(server: McpServer, cache: SnapshotCache) {
@@ -68,8 +69,8 @@ export function registerCharacterTools(server: McpServer, cache: SnapshotCache) 
       title: "Character",
       description:
         "Detailed dossier for one character by id — needs an id; use `find_character` if you only have a name. " +
-        "Traits, skills, gold/prestige/piety, health/stress, primary title, and claims " +
-        "(pressed/unpressed; CK3 does not store strong/weak).",
+        "Traits, skills, gold/prestige/piety, serialized health scalar/stress, primary title, and claims " +
+        "(pressed/unpressed; CK3 does not store strong/weak). The health scalar is not claimed to be UI-equivalent effective health.",
       inputSchema: { id: z.number().describe("character id, e.g. from find_character") },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -99,6 +100,7 @@ export function registerCharacterTools(server: McpServer, cache: SnapshotCache) 
         c.claims.length > 0
           ? c.claims.map((cl) => `${cl.title} (${cl.pressed ? "pressed" : "unpressed"})`).join(", ")
           : "none";
+      const health = healthSemantics(c.health);
 
       const body =
         `# ${c.name} (id ${c.id})\n` +
@@ -106,7 +108,8 @@ export function registerCharacterTools(server: McpServer, cache: SnapshotCache) 
         `- Skills: ${skillLine}\n` +
         `- Traits: ${traitsLine}\n` +
         `- Gold: ${c.gold ?? "?"} | Prestige: ${c.prestige ?? "?"} | Piety: ${c.piety ?? "?"}\n` +
-        `- Health: ${c.health ?? "?"} | Stress: ${c.stress ?? "?"}\n` +
+        `- Health (serialized save scalar): ${health.rawSaveValue ?? "?"} | Effective/UI-equivalent health: unavailable | Stress: ${c.stress ?? "?"}\n` +
+        `- Health limitation: ${health.limitation}\n` +
         `- Claims: ${claimsLine}`;
 
       return { content: [{ type: "text", text: stamp(snap, body) }] };
