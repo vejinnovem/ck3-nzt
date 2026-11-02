@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { getBuildInfo } from "./buildInfo.js";
 import { resolveConfig, discoverGameDir, discoverSaveDir } from "./config.js";
 import { extractGamestate, IronmanError } from "./envelope.js";
+import { attachRulerHealthSemantics } from "./health.js";
 import { Localizer } from "./localization.js";
 import { persistSnapshot } from "./memory.js";
 import { buildSnapshot } from "./snapshot.js";
@@ -30,7 +31,9 @@ export async function exportLatest(): Promise<void> {
   const save = await source.read(ref);
   const gamestate = extractGamestate(save);
   const gameDir = cfg.gameDir ?? (await discoverGameDir());
-  const snapshot = await buildSnapshot(gamestate, new Localizer(gameDir));
+  const snapshot = attachRulerHealthSemantics(
+    await buildSnapshot(gamestate, new Localizer(gameDir)),
+  );
   const build = getBuildInfo();
   Object.assign(snapshot, { build });
 
