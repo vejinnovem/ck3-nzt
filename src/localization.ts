@@ -1,6 +1,25 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+export interface LocalizationResolution {
+  value: string;
+  raw: string;
+  localizationUnresolved: boolean;
+}
+
+export interface TraitLocalizationResolution extends LocalizationResolution {
+  key: string;
+}
+
+const FEMALE_SELECT_CSTRING =
+  /\[\s*Select_CString\(\s*ROOT\.GetCharacter\.IsFemale\s*,\s*'((?:\\.|[^'])*)'\s*,\s*'((?:\\.|[^'])*)'\s*\)\s*\]/g;
+const SCRIPTED_LOCALIZATION =
+  /\[(?:Select_[A-Za-z0-9_]+|(?:ROOT|CHARACTER|SCOPE|THIS|TARGET)\.[^\]]+)[^\]]*\]/;
+
+function decodeConditionalArgument(value: string): string {
+  return value.replace(/\\'/g, "'").replace(/\\\\/g, "\\");
+}
+
 export class Localizer {
   private map = new Map<string, string>();
   private traitLookup: string[] | null = null;
@@ -164,16 +183,50 @@ export class Localizer {
     return key;
   }
 
-  resolveTrait(idx: number): string {
+  private resolveCharacterText(raw: string, female: boolean | undefined): LocalizationResolution {
+    let value = raw;
+    if (female !== undefined) {
+      value = value.replace(
+        FEMALE_SELECT_CSTRING,
+        (_match, femaleValue: string, maleValue: string) =>
+          decodeConditionalArgument(female ? femaleValue : maleValue),
+      );
+    }
+
+    return {
+      value,
+      raw,
+      localizationUnresolved: SCRIPTED_LOCALIZATION.test(value),
+    };
+  }
+
+  resolveForCharacter(key: string, female: boolean): LocalizationResolution {
+    return this.resolveCharacterText(this.resolve(key), female);
+  }
+
+  resolveTraitDetailed(idx: number, female?: boolean): TraitLocalizationResolution {
     const ident = this.traitLookup?.[idx];
-    if (!ident) return `trait_${idx}`;
+    if (!ident) {
+      const key = `trait_${idx}`;
+      return { key, ...this.resolveCharacterText(key, female) };
+    }
 
     const direct = this.resolve(ident);
-    if (direct !== ident) return direct;
+    if (direct !== ident) {
+      return { key: ident, ...this.resolveCharacterText(direct, female) };
+    }
 
     const prefixed = `trait_${ident}`;
     const resolvedPrefixed = this.resolve(prefixed);
-    return resolvedPrefixed !== prefixed ? resolvedPrefixed : ident;
+    if (resolvedPrefixed !== prefixed) {
+      return { key: prefixed, ...this.resolveCharacterText(resolvedPrefixed, female) };
+    }
+
+    return { key: ident, ...this.resolveCharacterText(ident, female) };
+  }
+
+  resolveTrait(idx: number, female?: boolean): string {
+    return this.resolveTraitDetailed(idx, female).value;
   }
 
   provinceForBarony(key: string): number | null {
