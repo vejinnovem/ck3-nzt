@@ -8,6 +8,7 @@ import { extractGamestate, IronmanError } from "./envelope.js";
 import { attachRulerHealthSemantics } from "./health.js";
 import { Localizer } from "./localization.js";
 import { persistSnapshot } from "./memory.js";
+import { attachSnapshotSkillSemantics } from "./skills.js";
 import { buildSnapshot } from "./snapshot.js";
 import { SaveFileSource } from "./source.js";
 
@@ -31,8 +32,8 @@ export async function exportLatest(): Promise<void> {
   const save = await source.read(ref);
   const gamestate = extractGamestate(save);
   const gameDir = cfg.gameDir ?? (await discoverGameDir());
-  const snapshot = attachRulerHealthSemantics(
-    await buildSnapshot(gamestate, new Localizer(gameDir)),
+  const snapshot = attachSnapshotSkillSemantics(
+    attachRulerHealthSemantics(await buildSnapshot(gamestate, new Localizer(gameDir))),
   );
   const build = getBuildInfo();
   Object.assign(snapshot, { build });
