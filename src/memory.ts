@@ -161,6 +161,22 @@ function heirBetrothalSignature(snapshot: Snapshot): string | null {
     .join("|");
 }
 
+function heirMarriageSignature(snapshot: Snapshot): string | null {
+  const heirs = snapshot.succession?.heirProfiles;
+  if (!heirs || heirs.length === 0) return null;
+
+  return [...heirs]
+    .sort((a, b) => a.position - b.position || a.id - b.id)
+    .map((heir) => {
+      const spouses = [...(heir.spouses ?? [])]
+        .sort((a, b) => a.id - b.id)
+        .map((spouse) => `${spouse.id}:${spouse.name}:${spouse.dynastyHouseId ?? ""}`)
+        .join(",");
+      return `${heir.id}:${heir.name}=${spouses}`;
+    })
+    .join("|");
+}
+
 function importantActionCount(snapshot: Snapshot, type: string): number {
   return snapshot.importantActions?.actions.filter((action) => action.type === type).length ?? 0;
 }
@@ -257,6 +273,7 @@ export function summarizeSnapshot(snapshot: Snapshot): Record<string, Scalar> {
     "realm.heldDuchies": titleSignature(snapshot.titles?.duchies),
     "succession.titleAssignments": successionAssignmentSignature(snapshot),
     "succession.heirBetrothals": heirBetrothalSignature(snapshot),
+    "succession.heirMarriages": heirMarriageSignature(snapshot),
     "military.levy": snapshot.military.levy,
     "military.strength": snapshot.military.strength,
     "military.currentStrength": snapshot.military.currentStrength,
