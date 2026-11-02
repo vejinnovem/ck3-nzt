@@ -12,6 +12,14 @@ export interface CharacterFocus {
 
 export type CharacterFocusKind = "lifestyle" | "education" | "other";
 
+export interface CharacterTraitLocalizationDiagnostic {
+  traitIndex: number;
+  localizationKey: string;
+  raw: string;
+  resolved: string;
+  localizationUnresolved: boolean;
+}
+
 export interface CharacterInfo {
   id: number;
   name: string;
@@ -37,6 +45,8 @@ export interface CharacterInfo {
     prowess: number;
   };
   traits: string[];
+  /** Only populated for scripted/conditional trait localization worth diagnosing. */
+  traitLocalizationDiagnostics?: CharacterTraitLocalizationDiagnostic[];
   gold: number | null;
   income: number | null;
   prestige: number | null;
@@ -184,14 +194,27 @@ export function extractCharacter(q: Query, loc: Localizer, id: number): Characte
     prowess: skillArr[5] ?? 0,
   };
 
+  const female = q.at(`${base}/female`) === true;
   const traitIndices = (q.at(`${base}/traits`) as number[] | undefined) ?? [];
-  const traits = traitIndices.map((idx) => loc.resolveTrait(idx));
+  const traitResolutions = traitIndices.map((traitIndex) => ({
+    traitIndex,
+    ...loc.resolveTraitDetailed(traitIndex, female),
+  }));
+  const traits = traitResolutions.map((entry) => entry.value);
+  const traitLocalizationDiagnostics = traitResolutions
+    .filter((entry) => entry.raw !== entry.value || entry.localizationUnresolved)
+    .map((entry) => ({
+      traitIndex: entry.traitIndex,
+      localizationKey: entry.key,
+      raw: entry.raw,
+      resolved: entry.value,
+      localizationUnresolved: entry.localizationUnresolved,
+    }));
 
   const dynastyHouseId = numberOrNull(q.at(`${base}/dynasty_house`));
   const birthValue = q.at(`${base}/birth`);
   const birth = birthValue === undefined ? null : formatCk3Date(birthValue);
   const age = ageAt(birthValue, q.at("/date"));
-  const female = q.at(`${base}/female`) === true;
   const cultureId = numberOrNull(q.at(`${base}/culture`));
   const faithId = numberOrNull(q.at(`${base}/faith`));
 
@@ -260,6 +283,7 @@ export function extractCharacter(q: Query, loc: Localizer, id: number): Characte
     councilTaskId,
     skills,
     traits,
+    traitLocalizationDiagnostics,
     gold,
     income,
     prestige,
