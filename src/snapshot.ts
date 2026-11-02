@@ -160,14 +160,20 @@ export function assessMenAtArmsReliability(military: MilitaryInfo): MenAtArmsRel
 }
 
 /**
- * Build the same best-effort province -> landed-title mapping used by operational-army
- * extraction. Barony mappings win over county/upper-tier fallbacks when a save exposes
- * more than one title reference for the same province.
+ * Build the province -> landed-title mapping used to resolve raid targets. Static
+ * barony province data is preferred when CK3_GAME_DIR is available; serialized save
+ * fields remain a fallback for older/test layouts and upper-tier references.
  */
-function provinceTitleMap(q: Query): Map<number, number> {
+function provinceTitleMap(q: Query, loc?: Localizer): Map<number, number> {
   const result = new Map<number, { titleId: number; score: number }>();
   const titles = obj(q.at("/landed_titles/landed_titles"));
   if (!titles) return new Map();
+
+  const consider = (provinceId: number | null, titleId: number, score: number): void => {
+    if (provinceId === null) return;
+    const existing = result.get(provinceId);
+    if (!existing || score > existing.score) result.set(provinceId, { titleId, score });
+  };
 
   for (const [idText, rawTitle] of Object.entries(titles)) {
     const title = obj(rawTitle);
@@ -175,11 +181,12 @@ function provinceTitleMap(q: Query): Map<number, number> {
     if (!title || !Number.isFinite(titleId)) continue;
     const key = typeof title["key"] === "string" ? title["key"] : "";
     const score = key.startsWith("b_") ? 3 : key.startsWith("c_") ? 2 : 1;
+
+    if (key.startsWith("b_") && loc) {
+      consider(loc.provinceForBarony(key), titleId, 4);
+    }
     for (const field of ["province", "capital_province", "capital"]) {
-      const provinceId = num(title[field]);
-      if (provinceId === null) continue;
-      const existing = result.get(provinceId);
-      if (!existing || score > existing.score) result.set(provinceId, { titleId, score });
+      consider(num(title[field]), titleId, score);
     }
   }
 
@@ -195,32 +202,96 @@ function titleBelongsToDomain(q: Query, titleId: number, domainIds: Set<number>)
   return false;
 }
 
+function countyForTitle(q: Query, titleId: number): number | null {
+  const visited = new Set<number>();
+  let current: number | null = titleId;
+  for (let depth = 0; depth < 8 && current !== null; depth += 1) {
+    if (visited.has(current)) return null;
+    visited.add(current);
+    const key = q.at(`/landed_titles/landed_titles/${current}/key`);
+    if (typeof key === "string" && key.startsWith("c_")) return current;
+    current = num(q.at(`/landed_titles/landed_titles/${current}/de_jure_liege`));
+  }
+  return null;
+}
+
 /**
- * Raid records identify their target by province ID, while landed_data.domain contains
- * title IDs. Raw reference matching therefore misses real raids against the player.
- * Reconcile the two namespaces through the landed-title province mapping and keep the
- * most relevant raids first in snapshots.
+ * Raid records identify their target by province ID, while realm membership is a title
+ * graph. Resolve province -> barony/title -> county, then use the already extracted
+ * de-facto realm graph to distinguish personal-domain raids from raids against vassals.
+ * The legacy function name is retained for API compatibility.
  */
-export function correctRaidDomainRelevance(q: Query, military: MilitaryInfo): MilitaryInfo {
+export function correctRaidDomainRelevance(
+  q: Query,
+  military: MilitaryInfo,
+  realm: PlayerRealmInfo | null = null,
+  loc?: Localizer,
+): MilitaryInfo {
   const playerId = num(q.at("/played_character/character"));
   if (playerId === null || military.raids.source === "unavailable") return military;
 
   const domainIds = new Set(numberList(q.at(`/living/${playerId}/landed_data/domain`)));
-  if (domainIds.size === 0) return military;
-  const provinceMap = provinceTitleMap(q);
+  const provinceMap = provinceTitleMap(q, loc);
+  const realmCounties = new Map((realm?.counties ?? []).map((county) => [county.titleId, county]));
 
   const records = military.raids.records.map((record) => {
     const rawProvince = record.fields["province"];
-    const provinceId = typeof rawProvince === "number" && Number.isFinite(rawProvince)
-      ? rawProvince
-      : null;
+    const provinceId =
+      typeof rawProvince === "number" && Number.isFinite(rawProvince) ? rawProvince : null;
     if (provinceId === null) return record;
+
     const titleId = provinceMap.get(provinceId);
-    const provinceTargetsDomain =
-      titleId !== undefined && titleBelongsToDomain(q, titleId, domainIds);
-    return provinceTargetsDomain && !record.playerRelevant
-      ? { ...record, playerRelevant: true }
-      : record;
+    if (titleId === undefined) return record;
+    const countyId = countyForTitle(q, titleId);
+    const realmCounty = countyId === null ? undefined : realmCounties.get(countyId);
+
+    if (realmCounty) {
+      const playerRelevance = realmCounty.heldByPlayer
+        ? "player_domain"
+        : "player_realm_vassal";
+      return {
+        ...record,
+        playerRelevant: true,
+        fields: {
+          ...record.fields,
+          target_title_id: titleId,
+          target_county_id: realmCounty.titleId,
+          player_relevance: playerRelevance,
+        },
+      };
+    }
+
+    // Compatibility fallback for callers that do not provide PlayerRealmInfo yet.
+    if (domainIds.size > 0 && titleBelongsToDomain(q, titleId, domainIds)) {
+      return {
+        ...record,
+        playerRelevant: true,
+        fields: {
+          ...record.fields,
+          target_title_id: titleId,
+          ...(countyId === null ? {} : { target_county_id: countyId }),
+          player_relevance: "player_domain",
+        },
+      };
+    }
+
+    // A resolved foreign target is stronger evidence than generic numeric-reference
+    // matching inside the raid record, which may identify an army/character rather than
+    // the land being raided.
+    if (countyId !== null && realm) {
+      return {
+        ...record,
+        playerRelevant: false,
+        fields: {
+          ...record.fields,
+          target_title_id: titleId,
+          target_county_id: countyId,
+          player_relevance: "foreign",
+        },
+      };
+    }
+
+    return record;
   });
 
   records.sort((a, b) => Number(b.playerRelevant) - Number(a.playerRelevant));
@@ -303,6 +374,8 @@ export async function buildSnapshot(gamestate: Buffer, loc: Localizer): Promise<
     const militaryBase = correctRaidDomainRelevance(
       q,
       correctMilitaryLiveFields(q, extractMilitary(q, loc), loc),
+      realm,
+      loc,
     );
     const military: SnapshotMilitaryInfo = {
       ...militaryBase,
