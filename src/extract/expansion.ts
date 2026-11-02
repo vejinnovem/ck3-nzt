@@ -3,6 +3,11 @@ import type { Localizer } from "../localization.js";
 import { formatCk3Date } from "../format.js";
 import type { War } from "./military.js";
 import { collectConfederationCoMemberIds } from "./confederations.js";
+import {
+  extractImportantActions,
+  type ImportantActionInfo,
+  type ImportantActionsInfo,
+} from "./importantActions.js";
 import { forEachRelation, forEachWar } from "./scan.js";
 import { resolveTitleName, titleTierFromKey, type TitleTier } from "./titleUtils.js";
 
@@ -78,11 +83,40 @@ export interface StrategicExpansionTarget {
   basis: "same_de_jure_kingdom";
 }
 
+export interface ExpansionWarTarget {
+  title: string;
+  cbType: string;
+  /** Present for confirmed UI CB actions; absent on legacy active-war entries. */
+  targetRulerId?: number;
+  targetRulerName?: string;
+  targetRealm?: string | null;
+  targetTitleIds?: number[];
+  confirmedAvailable?: boolean;
+  source?: "important_action";
+  evidence?: string[];
+}
+
+export interface TributaryTruceWarning {
+  targetRulerId: number;
+  targetRulerName: string;
+  targetRealm: string | null;
+  offerActionId: number | null;
+  cbActionIds: number[];
+  evidence: string[];
+  summary: string;
+}
+
 export interface ExpansionInfo {
   claims: ClaimRef[];
   pressedCount: number;
   deJureUnheld: { title: string }[];
-  warTargets: { title: string; cbType: string }[];
+  /** Active-war targets plus confirmed available-CB targets exposed by Important Actions. */
+  warTargets: ExpansionWarTarget[];
+  /**
+   * Incoming/current tributary interactions that overlap a confirmed available-CB target.
+   * Optional so older stored snapshots remain readable.
+   */
+  tributaryTruceWarnings?: TributaryTruceWarning[];
   /**
    * Save-derived expansion candidates inside the same de-jure kingdom as the
    * player's primary title. This is deliberately not called `neighbors`:
@@ -543,12 +577,106 @@ function extractStrategicTargets(
   };
 }
 
+function confirmedCbActions(actions: ImportantActionsInfo): ImportantActionInfo[] {
+  return actions.actions.filter(
+    (action) => action.type === "action_has_any_display_cb_on" && action.playerReferenced,
+  );
+}
+
+function actionEvidence(action: ImportantActionInfo): string[] {
+  return [
+    `important_action:${action.id ?? "unknown"}`,
+    ...(action.type ? [`type:${action.type}`] : []),
+  ];
+}
+
+function confirmedWarTargetsFromActions(
+  q: Query,
+  loc: Localizer,
+  actions: ImportantActionsInfo,
+): ExpansionWarTarget[] {
+  const result = new Map<number, ExpansionWarTarget>();
+  for (const action of confirmedCbActions(actions)) {
+    for (const target of action.targetCharacterRefs) {
+      if (result.has(target.id)) continue;
+      const realm = realmTitleForCharacter(q, loc, target.id);
+      const targetTitleIds = [...new Set(action.targetTitleRefs.map((title) => title.id))];
+      const targetTitleName = action.targetTitleRefs.find((title) => title.name)?.name ?? null;
+      result.set(target.id, {
+        title: targetTitleName ?? realm?.name ?? target.primaryTitle ?? target.name ?? `character ${target.id}`,
+        cbType: "available_cb",
+        targetRulerId: target.id,
+        targetRulerName: target.name ?? charName(q, target.id),
+        targetRealm: realm?.name ?? target.primaryTitle,
+        targetTitleIds,
+        confirmedAvailable: true,
+        source: "important_action",
+        evidence: actionEvidence(action),
+      });
+    }
+  }
+  return [...result.values()];
+}
+
+function actionSearchText(action: ImportantActionInfo): string {
+  const values = [
+    action.type ?? "",
+    ...Object.keys(action.primitiveFields),
+    ...Object.values(action.primitiveFields).map(String),
+    ...Object.keys(action.scopePrimitiveFields),
+    ...Object.values(action.scopePrimitiveFields).map(String),
+  ];
+  return values.join(" ").toLowerCase();
+}
+
+function isTributaryOfferAction(action: ImportantActionInfo): boolean {
+  const text = actionSearchText(action);
+  if (text.includes("join_tributary_war")) return false;
+  const tributarySignal = /(tribut|suzerain)/i.test(text);
+  const offerSignal = /(offer|submit|become|subject|suzerain)/i.test(text);
+  return tributarySignal && offerSignal;
+}
+
+function tributaryTruceWarningsFromActions(
+  q: Query,
+  loc: Localizer,
+  actions: ImportantActionsInfo,
+): TributaryTruceWarning[] {
+  const cbActionIdsByTarget = new Map<number, number[]>();
+  for (const action of confirmedCbActions(actions)) {
+    for (const target of action.targetCharacterRefs) {
+      const ids = cbActionIdsByTarget.get(target.id) ?? [];
+      if (action.id !== null && !ids.includes(action.id)) ids.push(action.id);
+      cbActionIdsByTarget.set(target.id, ids);
+    }
+  }
+
+  const result = new Map<number, TributaryTruceWarning>();
+  for (const action of actions.actions.filter(isTributaryOfferAction)) {
+    for (const target of action.targetCharacterRefs) {
+      const cbActionIds = cbActionIdsByTarget.get(target.id);
+      if (!cbActionIds) continue;
+      const realm = realmTitleForCharacter(q, loc, target.id);
+      const targetName = target.name ?? charName(q, target.id);
+      const targetRealm = realm?.name ?? target.primaryTitle;
+      result.set(target.id, {
+        targetRulerId: target.id,
+        targetRulerName: targetName,
+        targetRealm,
+        offerActionId: action.id,
+        cbActionIds,
+        evidence: [...actionEvidence(action), ...cbActionIds.map((id) => `available_cb_action:${id}`)],
+        summary: `Tributary offer from ${targetName}${targetRealm ? ` (${targetRealm})` : ""} overlaps a confirmed available CB; accepting the tributary interaction can create a truce and block expansion.`,
+      });
+    }
+  }
+  return [...result.values()].sort((a, b) => a.targetRulerId - b.targetRulerId);
+}
+
 export function extractExpansion(q: Query, loc: Localizer, wars: War[]): ExpansionInfo {
   const playerId = q.at("/played_character/character") as number;
   const aliveData = `/living/${playerId}/alive_data`;
 
-  // Claims: alive_data/claim is usually an array of { title, pressed? }, but
-  // normalize the single-object case too because Jomini can preserve either form.
   const rawClaimValue = q.at(`${aliveData}/claim`);
   const rawClaims = Array.isArray(rawClaimValue)
     ? (rawClaimValue as Array<Record<string, unknown>>)
@@ -563,7 +691,6 @@ export function extractExpansion(q: Query, loc: Localizer, wars: War[]): Expansi
     }));
   const pressedCount = claims.filter((c) => c.pressed).length;
 
-  // De jure unheld: titles in primary title's de_jure_vassals with no holder
   const primaryTitleId = numberList(q.at(`/living/${playerId}/landed_data/domain`))[0];
   const deJureVassals =
     primaryTitleId !== undefined
@@ -574,13 +701,25 @@ export function extractExpansion(q: Query, loc: Localizer, wars: War[]): Expansi
     .filter((tid) => q.at(`/landed_titles/landed_titles/${tid}/holder`) === undefined)
     .map((tid) => ({ title: resolveTitleName(q, loc, tid) }));
 
-  // War targets: reuse already-extracted wars
-  const warTargets = wars.map((w) => ({
-    title: w.targetTitle ?? "?",
-    cbType: w.cbType,
-  }));
+  const importantActions = extractImportantActions(q, loc);
+  const warTargets: ExpansionWarTarget[] = [
+    ...wars.map((w) => ({
+      title: w.targetTitle ?? "?",
+      cbType: w.cbType,
+    })),
+    ...confirmedWarTargetsFromActions(q, loc, importantActions),
+  ];
 
+  const tributaryTruceWarnings = tributaryTruceWarningsFromActions(q, loc, importantActions);
   const { strategicTargets, targetScope } = extractStrategicTargets(q, loc, playerId, primaryTitleId);
 
-  return { claims, pressedCount, deJureUnheld, warTargets, strategicTargets, targetScope };
+  return {
+    claims,
+    pressedCount,
+    deJureUnheld,
+    warTargets,
+    tributaryTruceWarnings,
+    strategicTargets,
+    targetScope,
+  };
 }
