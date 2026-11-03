@@ -1,5 +1,5 @@
 import type { Snapshot } from "./snapshot.js";
-import { skillSemantics, type SkillSemantics } from "./skills.js";
+import { skillSemantics, type CharacterSkills, type SkillSemantics } from "./skills.js";
 
 export interface ChampionQualityProfile {
   id: number;
@@ -48,16 +48,7 @@ export interface PrimarySpouseAdvisory {
   dynastyHouseId: number | null;
   dynastyHouseName: string | null;
   isLowborn: boolean;
-  serializedSkills: Snapshot["family"] extends infer _T
-    ? {
-        diplomacy: number;
-        martial: number;
-        stewardship: number;
-        intrigue: number;
-        learning: number;
-        prowess: number;
-      }
-    : never;
+  serializedSkills: CharacterSkills;
   skillSemantics: SkillSemantics;
 }
 
