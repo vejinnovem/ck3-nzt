@@ -9,6 +9,7 @@ import { resolveConfig, discoverGameDir, discoverSaveDir } from "./config.js";
 import { attachCouncilAdvisoryContext } from "./councilAdvisory.js";
 import { extractGamestate, IronmanError } from "./envelope.js";
 import { attachRulerHealthSemantics } from "./health.js";
+import { attachLifestyleAdvisoryContext } from "./lifestyleAdvisory.js";
 import { Localizer } from "./localization.js";
 import { persistSnapshot } from "./memory.js";
 import { augmentChangesWithPressReview } from "./pressReview.js";
@@ -64,12 +65,15 @@ export async function exportLatest(options: ExportLatestOptions = {}): Promise<v
     message: "Parsing ruler / realm / military / diplomacy / succession...",
     tone: "info",
   });
-  const snapshot = attachCouncilAdvisoryContext(
-    attachAdvisoryContext(
-      attachSnapshotSkillSemantics(
-        attachRulerHealthSemantics(await buildSnapshot(gamestate, new Localizer(gameDir))),
+  const snapshot = await attachLifestyleAdvisoryContext(
+    attachCouncilAdvisoryContext(
+      attachAdvisoryContext(
+        attachSnapshotSkillSemantics(
+          attachRulerHealthSemantics(await buildSnapshot(gamestate, new Localizer(gameDir))),
+        ),
       ),
     ),
+    gamestate,
   );
   const build = getBuildInfo();
   Object.assign(snapshot, { build });
