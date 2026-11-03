@@ -59,7 +59,7 @@ export async function detectDeadCharacterIds(
   });
 }
 
-function enrichAllianceDeaths(
+export function enrichAllianceDeaths(
   previous: Snapshot,
   current: Snapshot,
   review: PressReview,
@@ -87,7 +87,7 @@ function enrichAllianceDeaths(
   }
 }
 
-function enrichLowbornPrimarySpouse(
+export function enrichLowbornPrimarySpouse(
   previous: AdvisorySnapshot,
   current: AdvisorySnapshot,
   review: PressReview,
@@ -97,16 +97,15 @@ function enrichLowbornPrimarySpouse(
   if (!spouse || spouse.id === previousSpouseId) return;
 
   const advisory = current.advisory?.marriage;
-  const isLowborn = advisory?.currentPrimarySpouse?.id === spouse.id
-    ? advisory.currentPrimarySpouse.isLowborn
-    : spouse.dynastyHouseId === null;
+  const isLowborn =
+    advisory?.currentPrimarySpouse?.id === spouse.id
+      ? advisory.currentPrimarySpouse.isLowborn
+      : spouse.dynastyHouseId === null;
   if (!isLowborn) return;
 
   const estimatedLoss = advisory?.estimatedLegitimacyLoss ?? null;
   const alreadyPresent = review.items.some(
-    (item) =>
-      item.actorIds?.includes(spouse.id) === true &&
-      /lowborn|legitimacy/i.test(item.summary),
+    (item) => item.actorIds?.includes(spouse.id) === true && /lowborn|legitimacy/i.test(item.summary),
   );
   if (alreadyPresent) return;
 
@@ -160,7 +159,8 @@ export async function enrichPressReviewWithLiveEvidence(
 
     const lostAllianceIds = (previous.diplomacy?.alliances ?? [])
       .filter(
-        (ally) => !(current.diplomacy?.alliances ?? []).some((candidate) => candidate.id === ally.id),
+        (ally) =>
+          !(current.diplomacy?.alliances ?? []).some((candidate) => candidate.id === ally.id),
       )
       .map((ally) => ally.id);
     const deadIds = await detectDeadCharacterIds(gamestate, lostAllianceIds);
