@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
+import { attachAdvisoryContext } from "./advisory.js";
 import { getBuildInfo } from "./buildInfo.js";
 import { formatProgress, type ConsoleTone } from "./consoleUi.js";
 import { resolveConfig, discoverGameDir, discoverSaveDir } from "./config.js";
@@ -10,6 +11,7 @@ import { attachRulerHealthSemantics } from "./health.js";
 import { Localizer } from "./localization.js";
 import { persistSnapshot } from "./memory.js";
 import { augmentChangesWithPressReview } from "./pressReview.js";
+import { enrichPressReviewWithLiveEvidence } from "./pressReviewEnrichment.js";
 import { attachSnapshotSkillSemantics } from "./skills.js";
 import { buildSnapshot } from "./snapshot.js";
 import { SaveFileSource } from "./source.js";
@@ -61,8 +63,10 @@ export async function exportLatest(options: ExportLatestOptions = {}): Promise<v
     message: "Parsing ruler / realm / military / diplomacy / succession...",
     tone: "info",
   });
-  const snapshot = attachSnapshotSkillSemantics(
-    attachRulerHealthSemantics(await buildSnapshot(gamestate, new Localizer(gameDir))),
+  const snapshot = attachAdvisoryContext(
+    attachSnapshotSkillSemantics(
+      attachRulerHealthSemantics(await buildSnapshot(gamestate, new Localizer(gameDir))),
+    ),
   );
   const build = getBuildInfo();
   Object.assign(snapshot, { build });
@@ -89,10 +93,12 @@ export async function exportLatest(options: ExportLatestOptions = {}): Promise<v
     tone: "info",
   });
   const result = await persistSnapshot(snapshot, { sourceFingerprint });
-  const pressReviewCount = await augmentChangesWithPressReview(
+  await augmentChangesWithPressReview(result.databasePath, result.outputDir, sourceFingerprint);
+  const pressReviewCount = await enrichPressReviewWithLiveEvidence(
     result.databasePath,
     result.outputDir,
     sourceFingerprint,
+    gamestate,
   );
 
   if (result.written) {
