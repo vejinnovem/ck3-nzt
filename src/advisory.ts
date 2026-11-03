@@ -147,6 +147,7 @@ export function buildArmyQualityDiagnostics(snapshot: Snapshot): ArmyQualityDiag
     "CK3's player-visible army quality diamonds are runtime-derived and are not reconstructed; the export reports the underlying composition instead.",
     "Serialized regiment max is the current regiment soldier cap, not the maximum UI size level, so size-upgrade headroom is unknown.",
     "Men-at-Arms creation/upgrade/upkeep costs and fully modified combat stats require static/runtime game data and are not inferred from save totals.",
+    "The serialized realm levy scalar is not a UI-equivalent current-levy count. levyShareOfCurrentStrength is therefore intentionally null instead of mixing incompatible quantities.",
   ];
   if (slotsMax === null) limitations.push("Men-at-Arms slot cap is not serialized/reconstructed for this snapshot.");
   if (champions.some((champion) => champion.prowess === null)) {
@@ -171,7 +172,7 @@ export function buildArmyQualityDiagnostics(snapshot: Snapshot): ArmyQualityDiag
     menAtArmsCurrent: maaCurrent,
     menAtArmsMax: maaMax,
     championCount: military.champions?.current ?? championIds.length,
-    levyShareOfCurrentStrength: safeShare(levy, currentStrength),
+    levyShareOfCurrentStrength: null,
     menAtArmsShareOfCurrentStrength: safeShare(maaCurrent, currentStrength),
     levyToMenAtArmsRatio,
     professionalCoreUnderrepresented,

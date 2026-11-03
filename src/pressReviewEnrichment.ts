@@ -92,7 +92,8 @@ export function enrichLowbornPrimarySpouse(
   current: AdvisorySnapshot,
   review: PressReview,
 ): void {
-  const previousSpouseId = previous.family?.primarySpouse?.id ?? null;
+  const previousPrimarySpouse = previous.family?.primarySpouse ?? null;
+  const previousSpouseId = previousPrimarySpouse?.id ?? null;
   const spouse = current.family?.primarySpouse ?? null;
   if (!spouse || spouse.id === previousSpouseId) return;
 
@@ -103,12 +104,29 @@ export function enrichLowbornPrimarySpouse(
       : spouse.dynastyHouseId === null;
   if (!isLowborn) return;
 
-  const estimatedLoss = advisory?.estimatedLegitimacyLoss ?? null;
   const alreadyPresent = review.items.some(
     (item) => item.actorIds?.includes(spouse.id) === true && /lowborn|legitimacy/i.test(item.summary),
   );
   if (alreadyPresent) return;
 
+  const previousSpouseIds = new Set((previous.family?.spouses ?? []).map((entry) => entry.id));
+  const newlyMarriedStateTransition = previousSpouseId === null && !previousSpouseIds.has(spouse.id);
+
+  // A spouse-to-spouse difference is not positive evidence of a marriage event. It can
+  // be produced by loading another save branch, as happened between the 889.10.12 and
+  // 889.11.9 campaign checkpoints. Never claim that a legitimacy cost was just paid
+  // when all we know is that the primary spouse differs from the preceding snapshot.
+  if (!newlyMarriedStateTransition) {
+    review.items.push({
+      category: "family",
+      priority: "informational",
+      summary: `Primary spouse differs from previous checkpoint: lowborn ${spouse.name}. Snapshot diff does not prove a new marriage; timeline may have been reloaded.`,
+      actorIds: [previousSpouseId, spouse.id].filter((id): id is number => id !== null),
+    });
+    return;
+  }
+
+  const estimatedLoss = advisory?.estimatedLegitimacyLoss ?? null;
   review.items.push({
     category: "family",
     priority: "action_required",
