@@ -6,11 +6,34 @@ import { forEachRelation } from "./scan.js";
 import { activeSubjectContracts } from "./subjectContracts.js";
 import { resolveTitleName } from "./titleUtils.js";
 
+export type AllianceProvenanceKind = "marriage" | "betrothal" | "relationship" | "unknown";
+
+export interface AllianceProvenance {
+  kind: AllianceProvenanceKind;
+  source: "active_relations";
+  throughCharacterIds: number[];
+  evidence: string[];
+}
+
+export interface AlliedRealmStrength {
+  levy: number | null;
+  strength: number | null;
+  currentStrength: number | null;
+  strengthWithoutHires: number | null;
+  source: "landed_data_raw" | "unavailable";
+  uiEquivalent: false;
+  limitation: string;
+}
+
 export interface DipRef {
   id: number;
   name: string;
   /** Characters whose marriage/betrothal/relationship created the alliance, when saved by CK3. */
   throughCharacterIds: number[];
+  /** Optional for backwards compatibility with snapshots created before #88. */
+  provenance?: AllianceProvenance;
+  /** Raw allied-ruler realm totals; never presented as CK3's effective/UI strength. */
+  realmStrength?: AlliedRealmStrength;
 }
 export interface TruceRef {
   id: number;
@@ -120,6 +143,10 @@ function numberList(value: unknown): number[] {
   if (typeof value === "number") return [value];
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is number => typeof item === "number");
+}
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function asObject(value: unknown): Obj | null {
@@ -472,6 +499,92 @@ function collectAllianceThroughIds(value: unknown, out = new Set<number>()): num
   return [...out];
 }
 
+function collectAllianceThroughPairs(
+  value: unknown,
+  out: Array<[number, number]> = [],
+): Array<[number, number]> {
+  if (Array.isArray(value)) {
+    for (const item of value) collectAllianceThroughPairs(item, out);
+    return out;
+  }
+  const record = asObject(value);
+  if (!record) return out;
+
+  const first = numberOrNull(record["allied_through_0"]);
+  const second = numberOrNull(record["allied_through_1"]);
+  if (first !== null && second !== null) out.push([first, second]);
+  for (const child of Object.values(record)) {
+    if (child && typeof child === "object") collectAllianceThroughPairs(child, out);
+  }
+  return out;
+}
+
+function areSpouses(q: Query, first: number, second: number): boolean {
+  const firstSpouses = numberList(q.at(`/living/${first}/family_data/spouse`));
+  const secondSpouses = numberList(q.at(`/living/${second}/family_data/spouse`));
+  const firstPrimary = numberOrNull(q.at(`/living/${first}/family_data/primary_spouse`));
+  const secondPrimary = numberOrNull(q.at(`/living/${second}/family_data/primary_spouse`));
+  return (
+    firstSpouses.includes(second) ||
+    secondSpouses.includes(first) ||
+    firstPrimary === second ||
+    secondPrimary === first
+  );
+}
+
+function areBetrothed(q: Query, first: number, second: number): boolean {
+  return (
+    numberOrNull(q.at(`/living/${first}/family_data/betrothed`)) === second ||
+    numberOrNull(q.at(`/living/${second}/family_data/betrothed`)) === first
+  );
+}
+
+function allianceProvenance(q: Query, value: unknown): AllianceProvenance {
+  const throughCharacterIds = collectAllianceThroughIds(value);
+  const pairs = collectAllianceThroughPairs(value);
+  const evidence = pairs.map(
+    ([first, second]) => `active_relations.alliances.allied_through:${first}<->${second}`,
+  );
+
+  let kind: AllianceProvenanceKind = throughCharacterIds.length > 0 ? "relationship" : "unknown";
+  if (pairs.some(([first, second]) => areSpouses(q, first, second))) {
+    kind = "marriage";
+    evidence.push("living.*.family_data.spouse/primary_spouse");
+  } else if (pairs.some(([first, second]) => areBetrothed(q, first, second))) {
+    kind = "betrothal";
+    evidence.push("living.*.family_data.betrothed");
+  }
+
+  return {
+    kind,
+    source: "active_relations",
+    throughCharacterIds,
+    evidence: [...new Set(evidence)],
+  };
+}
+
+function alliedRealmStrength(q: Query, rulerId: number): AlliedRealmStrength {
+  const base = `/living/${rulerId}/landed_data`;
+  const levy = numberOrNull(q.at(`${base}/levy`));
+  const strength = numberOrNull(q.at(`${base}/strength`));
+  const currentStrength = numberOrNull(q.at(`${base}/current_strength`));
+  const strengthWithoutHires = numberOrNull(q.at(`${base}/strength_without_hires`));
+  const available =
+    levy !== null || strength !== null || currentStrength !== null || strengthWithoutHires !== null;
+
+  return {
+    levy,
+    strength,
+    currentStrength,
+    strengthWithoutHires,
+    source: available ? "landed_data_raw" : "unavailable",
+    uiEquivalent: false,
+    limitation: available
+      ? "Save-derived allied-ruler landed_data totals are raw realm mobilisation values and are not guaranteed to equal CK3's player-visible effective strength."
+      : "No supported allied-ruler landed_data strength fields were serialized for this alliance; strength remains unknown.",
+  };
+}
+
 function extractPersonalRelations(
   q: Query,
   loc: Localizer,
@@ -546,10 +659,13 @@ export function extractDiplomacy(q: Query, loc: Localizer): DiplomacyInfo {
   forEachRelation(q, playerId, (otherId, entry) => {
     if (entry["alliances"] != null && hasRealm(q, otherId) && !allianceIds.has(otherId)) {
       allianceIds.add(otherId);
+      const provenance = allianceProvenance(q, entry["alliances"]);
       alliances.push({
         id: otherId,
         name: resolveCharName(q, otherId),
-        throughCharacterIds: collectAllianceThroughIds(entry["alliances"]),
+        throughCharacterIds: provenance.throughCharacterIds,
+        provenance,
+        realmStrength: alliedRealmStrength(q, otherId),
       });
     }
     const truceSlot =
