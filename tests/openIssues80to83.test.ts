@@ -201,7 +201,7 @@ test("#83 keeps Iliana serialized skills distinct from the values shown by CK3 U
 });
 
 test("#80 identifies a former ally as dead only with positive dead-store evidence", async () => {
-  const gamestate = Buffer.from(`date=888.3.28\nplayed_character={ character=1 player=1 }\nliving={\n1={ first_name=\"Siemowit\" }\n2={ first_name=\"LivingAlly\" }\n}\ndead_unprunable={\n13571={ first_name=\"Rurik\" }\n}\n`);
+  const gamestate = Buffer.from(`date=888.3.28\nplayed_character={ character=1 player=1 }\nliving={\n1={ first_name="Siemowit" }\n2={ first_name="LivingAlly" }\n}\ndead_unprunable={\n13571={ first_name="Rurik" }\n}\n`);
 
   const dead = await detectDeadCharacterIds(gamestate, [13571, 2, 999]);
   expect([...dead]).toEqual([13571]);
